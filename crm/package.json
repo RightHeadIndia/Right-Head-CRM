@@ -1,0 +1,14 @@
+{
+  "name": "company-crm",
+  "version": "1.1.0",
+  "description": "Simple CRM: calling status, follow-up reminders, replies, onboarded clients, red zone and mass mailing, tasks, deals pipeline, reports, email templates, CSV export and Claude AI features",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.14"
+  }
+}
