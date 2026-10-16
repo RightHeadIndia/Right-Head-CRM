@@ -3,11 +3,17 @@
   "version": "1.1.0",
   "description": "Simple CRM: calling status, follow-up reminders, replies, onboarded clients, red zone and mass mailing, tasks, deals pipeline, reports, email templates, CSV export and Claude AI features",
   "main": "server.js",
+  "engines": {
+    "node": ">=24.15.0"
+  },
   "scripts": {
-    "start": "node server.js"
+    "setup": "node scripts/setup.js",
+    "start": "node --env-file-if-exists=.env server.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.134.0",
+    "@supabase/supabase-js": "^2.118.0",
     "express": "^4.19.2",
     "nodemailer": "^6.9.14"
   }

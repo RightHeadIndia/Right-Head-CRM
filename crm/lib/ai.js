@@ -8,7 +8,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const tools = require('./tools');
 
-const DEFAULT_MODEL = 'claude-sonnet-5-5';
+const DEFAULT_MODEL = 'claude-sonnet-5';
 const MAX_AI_CALLS_PER_MINUTE = 40; // safety net against runaway loops / accidental double clicks
 
 // ---------- small helpers ----------
@@ -314,7 +314,9 @@ function mount(app, ctx) {
     try { res.json(await fn(req, ctx.load())); }
     catch (e) {
       if (e instanceof AiError) return res.status(e.status).json({ error: e.message, code: e.code });
-      console.error(e); res.status(500).json({ error: 'Something went wrong: ' + e.message });
+      if (e.code === 'CRM_CONCURRENT_UPDATE') return res.status(409).json({ error: e.message });
+      console.error('AI request failed:', e.message);
+      res.status(500).json({ error: 'The AI request could not be completed. Try again.' });
     }
   };
 

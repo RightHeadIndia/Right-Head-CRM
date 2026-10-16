@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sign in · Company CRM</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="login.css">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="login-mark">CRM</div>
+    <h1>Company CRM</h1>
+    <p>Sign in with your company password.</p>
+    <form id="loginForm">
+      <label for="password">Company password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+      <div id="loginError" role="alert" aria-live="polite"></div>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+  </main>
+  <script src="login.js"></script>
+</body>
+</html>

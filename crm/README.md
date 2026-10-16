@@ -1,26 +1,36 @@
 # Company CRM
 
-A lightweight CRM for a sales / outreach team. No database to install: data is saved in `data/db.json`.
+A CRM for a sales / outreach team. Data is stored in a local SQLite database at `data/crm.sqlite` by default; no separate database server is needed.
 
 ## Quick start
 
-1. Install Node.js 18 or newer from https://nodejs.org
+1. Install Node.js 24.15 or newer from https://nodejs.org (the app uses Node's built-in SQLite support)
 2. Open a terminal in this folder and run:
 
 ```
 npm install
+npm run setup
+```
+
+`npm run setup` creates a local `.env` with a generated shared password and encryption key. It will not overwrite an existing `.env`. Save both values in your company password manager; keep a separate copy of the encryption key for backups.
+
+3. Start the app and open http://localhost:3000:
+
+```
 npm start
 ```
 
-3. Open http://localhost:3000
+Run the automated migration, encryption, conflict, login, API, campaign, CSV, and backup checks with `npm test`.
 
-To protect the app with a password (recommended if you host it online):
+The `.env` file contains the shared password and encryption key. Restrict access to it at the operating system level. Behind an HTTPS reverse proxy, add `CRM_TRUST_PROXY=1` to `.env` so the session cookie is marked secure.
 
-```
-APP_PASSWORD=yourpassword npm start        # Mac/Linux
-set APP_PASSWORD=yourpassword && npm start # Windows (cmd)
-```
-Then log in with username `admin` and that password.
+Sessions expire after 12 hours and are cleared when the server restarts. Keep the service behind your company firewall; use an HTTPS reverse proxy if anyone can connect over an untrusted network.
+
+### Database and migration
+On first startup, the app creates `data/crm.sqlite`. If `data/db.json` exists, its CRM records and settings are imported once into SQLite. The original JSON file is left intact, and a `db.json.pre-sqlite.bak` copy is made before import. Both legacy JSON files are plaintext: restrict their file permissions and remove them only after confirming the SQLite migration and a separate backup. This checkout already tracks `crm/data/db.json`; before storing company data, remove it from Git tracking with `git rm --cached crm/data/db.json` from the repository root. `.gitignore` cannot untrack a file that is already tracked. If migration fails, startup stops and the JSON source remains available for recovery. SQLite records and settings are encrypted with AES-256-GCM using `CRM_ENCRYPTION_KEY`; that key is never stored in the database. Updates are committed in SQLite transactions; if two requests edit the same record concurrently, the later one receives a conflict instead of silently overwriting the first. `CRM_DB_FILE` can point to a database on a mounted persistent disk.
+
+### Backups and restore
+Use **Settings & Import > Database backup > Download encrypted backup** regularly and store the file in a restricted location. The downloaded database is encrypted, but restoring it requires the same `CRM_ENCRYPTION_KEY`. To restore, stop the CRM service, replace the configured SQLite file with the backup, remove stale `-wal` and `-shm` sidecar files for that database, then restart with the same key. Keep a second copy of the encryption key separate from the database backups.
 
 ## What you get
 
@@ -40,7 +50,7 @@ Then log in with username `admin` and that password.
 - **Calling Status** - change call status from a dropdown right in the table; click the phone number to call, or WhatsApp button to chat.
 - **Follow-up Reminders** - everything with a reminder date, oldest first.
 - **Replies (Blue Zone)**, **Onboarded Clients**, **Red Zone** - one page per zone with colour-coded rows.
-- **Mass Mailing** - choose audience, write subject and message, send. `{{name}}` and `{{company}}` are personalised per client. "All clients" never includes the Red Zone.
+- **Mass Mailing** - choose audience, write subject and message, send. `{{name}}` and `{{company}}` are personalised per client. Said No clients are excluded from every audience; each recipient's current stage is checked again before sending. Campaign progress and send errors are saved as the send runs. A campaign marked interrupted after a restart is not automatically retried, to avoid duplicate emails.
 - **Settings & Import** - SMTP email settings and CSV import.
 
 ### Sales tools (new)
@@ -50,13 +60,13 @@ Then log in with username `admin` and that password.
 - **Email Templates** - save subject + message with `{{name}}` / `{{company}}`. Load them in Mass Mailing, or use one for a single client from the Draft message box. "Save as template" on the Mass Mailing page saves what you just wrote.
 - **CSV export** - clients, deals, tasks and activity log (buttons on All Clients, Tasks, Deals and Reports). Files open in Excel/Google Sheets; cells that could be read as spreadsheet formulas are neutralised.
 
-### AI features powered by Claude (new)
+### AI features powered by Claude
 Set up: Settings & Import > **General & AI** > paste your Anthropic API key (from console.anthropic.com) > Test AI connection. Or set it on the server instead (recommended when hosting online):
 
 ```
-ANTHROPIC_API_KEY=sk-ant-... npm start
+APP_PASSWORD='use-a-long-unique-password' CRM_ENCRYPTION_KEY='paste-the-saved-key' ANTHROPIC_API_KEY=sk-ant-... npm start
 ```
-Optional: `CLAUDE_MODEL=...` (or the Model box in Settings) to choose another Claude model. Default is `claude-sonnet-5-5`.
+Optional: `CLAUDE_MODEL=...` (or the Model box in Settings) to choose another Claude model. Default is `claude-sonnet-5`.
 
 | Where | What it does |
 |---|---|
@@ -91,11 +101,12 @@ Until SMTP is configured, campaigns run in **simulation mode** (logged, nothing 
 Use mass mail only for people who have agreed to hear from you, and follow the anti-spam rules in your country (for example India's DPDP Act, and CAN-SPAM/GDPR for foreign contacts). Gmail and similar providers limit daily sends (about 500/day for personal Gmail), so send large lists through a business mail service.
 
 ## Importing clients
-Settings & Import > choose a CSV with headers `name,company,phone,email` > Import. Duplicate emails/phones are skipped.
+In Google Sheets, choose **File > Download > Comma-separated values (.csv)** for the client tab. In the CRM, open **Settings & Import**, choose that CSV and click **Import**. Use headers such as `name,company,phone,email,source,notes,stage,callStatus,followUp,lastReply`; common alternatives like `Full Name`, `Company Name`, `Mobile Number`, `Email Address`, `Status`, and `Next Follow Up` are also recognized. Valid stage values are `new`, `contacted`, `replied`, `onboarded`, and `rejected`; valid call statuses are `not_called`, `connected`, `no_answer`, `busy`, and `callback`. Duplicate emails/phones are skipped. Large files are uploaded in batches. This importer creates clients; tasks, deals, and activity history need their own import mapping before they can be imported.
 
 ## Project structure
 ```
-server.js          API + storage + mass mail (Express, Nodemailer)
+server.js          API + SQLite storage + mass mail (Express, Nodemailer)
+lib/database.js    SQLite schema, transactional persistence and one-time JSON migration
 lib/tools.js       tasks, deals, templates, reports, CSV export
 lib/ai.js          Claude features (drafts, summaries, reply analysis, campaigns, assistant)
 public/index.html  page shell with sidebar
@@ -103,7 +114,7 @@ public/style.css   styling
 public/app.js      dashboard, client tables and modal, mass mail, settings, reminders
 public/tools.js    tasks, deals board, reports, templates pages
 public/ai.js       AI buttons, campaign writer, assistant chat, AI settings
-data/db.json       created automatically on first run (back this file up!)
+data/crm.sqlite    created automatically on first run (back this file up!)
 ```
 
 ## API (for developers)
@@ -118,8 +129,10 @@ data/db.json       created automatically on first run (back this file up!)
 - `POST /api/mail/send-one` `{clientId, subject, body}`
 - `GET /api/ai/status`, `POST /api/ai/{test|draft|summary|analyze-reply|campaign|assistant}`
 
-## Hosting online
-Run on any VPS or service that supports Node.js (Render, Railway, a DigitalOcean droplet). Set `APP_PASSWORD`, use HTTPS, and keep the `data/` folder on persistent storage.
+## Running on a company server
+Install Node.js 24.15+, copy this folder to the server, install dependencies with `npm install`, and run `npm run setup` once to create the secrets file. Keep the app behind the company firewall or an HTTPS reverse proxy, run it under a dedicated OS account, and store `CRM_DB_FILE` on a persistent disk with restricted file permissions. Back up the SQLite database regularly and verify that backups can be restored. Do not put the database or credentials into source control.
+
+The shared-password login is intended for a small trusted team behind a company network boundary. It does not provide per-employee identity, roles, or an audit trail of who made a change. Add those before using the CRM where individual accountability or access separation is required. Protect the database file and environment variables with OS permissions. CRM records, settings, SMTP credentials, and an AI key entered in Settings are encrypted at rest in SQLite using `CRM_ENCRYPTION_KEY`. An `ANTHROPIC_API_KEY` supplied through the environment is kept outside SQLite; protect the environment file and server account.
 
 ## Ideas for next steps
-Multiple users with logins, a click-to-call integration (Exotel / Knowlarity), WhatsApp Business API, email open tracking, and a PostgreSQL database for large teams.
+Per-employee accounts and roles, a click-to-call integration (Exotel / Knowlarity), WhatsApp Business API, email open tracking, and PostgreSQL for larger or multi-server deployments.

@@ -20,7 +20,7 @@ async function aiCall(path, body, btn) {
     const r = await api(path, 'POST', { ...body, tz: TZ });
     if (r.error) { toast(r.error); return null; }
     return r;
-  } catch (e) { toast('Could not reach the server. Is it running?'); return null; }
+  } catch (e) { toast(e.message || 'Could not reach the server. Is it running?'); return null; }
   finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
 }
 

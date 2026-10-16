@@ -5,26 +5,46 @@ const DEAL_STAGES = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'los
 // Used only for the "weighted forecast" on the Reports page. Edit to match how your team closes.
 const DEAL_WEIGHT = { lead: 0.1, qualified: 0.25, proposal: 0.5, negotiation: 0.75, won: 1, lost: 0 };
 const PRIORITIES = ['low', 'normal', 'high'];
+const isObject = value => !!value && typeof value === 'object' && !Array.isArray(value);
 
 const str = (v, max = 500) => String(v ?? '').trim().slice(0, max);
 
 // '' -> '', valid date/ISO -> ISO string, 'YYYY-MM-DD' kept as-is, invalid -> null
 function cleanDate(v) {
   if (v === undefined || v === null || v === '') return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(String(v))) return String(v);
+  if (typeof v !== 'string') return null;
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (dateOnly) {
+    const [, year, month, day] = dateOnly;
+    const d = new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+    return !isNaN(d) && d.toISOString().slice(0, 10) === v ? v : null;
+  }
+  const datePrefix = /^(\d{4}-\d{2}-\d{2})T/.exec(v);
+  if (datePrefix) {
+    const d = new Date(`${datePrefix[1]}T00:00:00.000Z`);
+    if (isNaN(d) || d.toISOString().slice(0, 10) !== datePrefix[1]) return null;
+  }
   const d = new Date(v);
   return isNaN(d) ? null : d.toISOString();
 }
 function cleanMoney(v) {
+  if (typeof v !== 'number' && typeof v !== 'string') return null;
   const n = Number(v === '' || v == null ? 0 : v);
   return Number.isFinite(n) && n >= 0 && n <= 1e12 ? n : null;
 }
 
 // ---------- tasks ----------
 function makeTask(ctx, db, b) {
+  if (!isObject(b)) return { error: 'task must be an object' };
+  if (typeof b.title !== 'string') return { error: 'title must be text' };
   const title = str(b.title, 200);
   if (!title) return { error: 'title is required' };
+  if (b.title.trim().length > 200) return { error: 'title is too long (maximum 200 characters)' };
+  if (b.clientId !== undefined && typeof b.clientId !== 'string') return { error: 'clientId must be text' };
   if (b.clientId && !db.clients.some(c => c.id === b.clientId)) return { error: 'client not found' };
+  if (b.notes !== undefined && (typeof b.notes !== 'string' || b.notes.length > 2000)) return { error: 'notes must be text no longer than 2000 characters' };
+  if (b.priority !== undefined && !PRIORITIES.includes(b.priority)) return { error: 'priority is not valid' };
+  if (b.dueAt !== undefined && b.dueAt !== '' && typeof b.dueAt !== 'string') return { error: 'dueAt must be text' };
   const dueAt = cleanDate(b.dueAt);
   if (dueAt === null) return { error: 'dueAt is not a valid date' };
   const t = {
@@ -39,9 +59,17 @@ function makeTask(ctx, db, b) {
 
 // ---------- deals ----------
 function makeDeal(ctx, db, b) {
+  if (!isObject(b)) return { error: 'deal must be an object' };
+  if (typeof b.title !== 'string') return { error: 'title must be text' };
   const title = str(b.title, 200);
   if (!title) return { error: 'title is required' };
+  if (b.title.trim().length > 200) return { error: 'title is too long (maximum 200 characters)' };
+  if (b.clientId !== undefined && typeof b.clientId !== 'string') return { error: 'clientId must be text' };
   if (b.clientId && !db.clients.some(c => c.id === b.clientId)) return { error: 'client not found' };
+  if (b.stage !== undefined && !DEAL_STAGES.includes(b.stage)) return { error: 'stage is not valid' };
+  if (b.expectedClose !== undefined && b.expectedClose !== '' && typeof b.expectedClose !== 'string') return { error: 'expectedClose must be text' };
+  if (b.notes !== undefined && (typeof b.notes !== 'string' || b.notes.length > 2000)) return { error: 'notes must be text no longer than 2000 characters' };
+  if (b.lostReason !== undefined && (typeof b.lostReason !== 'string' || b.lostReason.length > 300)) return { error: 'lostReason must be text no longer than 300 characters' };
   const value = cleanMoney(b.value); if (value === null) return { error: 'value must be a positive number' };
   const expectedClose = cleanDate(b.expectedClose); if (expectedClose === null) return { error: 'expectedClose is not a valid date' };
   const stage = DEAL_STAGES.includes(b.stage) ? b.stage : 'lead';
@@ -138,7 +166,7 @@ function csvCell(v) {
   if (/^[=@\t\r]/.test(s) || (/^[+-]/.test(s) && !/^[+-]?[\d\s().-]+$/.test(s))) s = "'" + s;
   return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
-const toCsv = (cols, rows) => '﻿' + [cols.join(','), ...rows.map(r => cols.map(c => csvCell(r[c])).join(','))].join('\r\n') + '\r\n';
+const toCsv = (cols, rows) => '\uFEFF' + [cols.join(','), ...rows.map(r => cols.map(c => csvCell(r[c])).join(','))].join('\r\n') + '\r\n';
 
 function mount(app, ctx) {
   const { load, save, uid, now, log } = ctx;
@@ -153,11 +181,18 @@ function mount(app, ctx) {
     save(db); res.json(r.task);
   });
   app.put('/api/tasks/:id', (req, res) => {
-    const db = load(); const t = byId(db.tasks, req.params.id), b = req.body || {};
+    const db = load(); const t = byId(db.tasks, req.params.id), b = req.body;
     if (!t) return res.status(404).json({ error: 'not found' });
-    if (b.title !== undefined) { const v = str(b.title, 200); if (!v) return res.status(400).json({ error: 'title is required' }); t.title = v; }
-    if (b.notes !== undefined) t.notes = str(b.notes, 2000);
-    if (b.priority && PRIORITIES.includes(b.priority)) t.priority = b.priority;
+    if (!isObject(b)) return res.status(400).json({ error: 'task update must be an object' });
+    if (b.title !== undefined && (typeof b.title !== 'string' || !b.title.trim() || b.title.trim().length > 200)) return res.status(400).json({ error: 'title must be 1 to 200 characters' });
+    if (b.notes !== undefined && (typeof b.notes !== 'string' || b.notes.length > 2000)) return res.status(400).json({ error: 'notes must be text no longer than 2000 characters' });
+    if (b.priority !== undefined && !PRIORITIES.includes(b.priority)) return res.status(400).json({ error: 'priority is not valid' });
+    if (b.clientId !== undefined && typeof b.clientId !== 'string') return res.status(400).json({ error: 'clientId must be text' });
+    if (b.dueAt !== undefined && b.dueAt !== '' && typeof b.dueAt !== 'string') return res.status(400).json({ error: 'dueAt must be text' });
+    if (b.done !== undefined && typeof b.done !== 'boolean') return res.status(400).json({ error: 'done must be true or false' });
+    if (b.title !== undefined) t.title = b.title.trim();
+    if (b.notes !== undefined) t.notes = b.notes;
+    if (b.priority !== undefined) t.priority = b.priority;
     if (b.clientId !== undefined) {
       if (b.clientId && !byId(db.clients, b.clientId)) return res.status(400).json({ error: 'client not found' });
       t.clientId = b.clientId || '';
@@ -182,17 +217,24 @@ function mount(app, ctx) {
     save(db); res.json(r.deal);
   });
   app.put('/api/deals/:id', (req, res) => {
-    const db = load(); const d = byId(db.deals, req.params.id), b = req.body || {};
+    const db = load(); const d = byId(db.deals, req.params.id), b = req.body;
     if (!d) return res.status(404).json({ error: 'not found' });
-    if (b.title !== undefined) { const v = str(b.title, 200); if (!v) return res.status(400).json({ error: 'title is required' }); d.title = v; }
-    if (b.notes !== undefined) d.notes = str(b.notes, 2000);
-    if (b.value !== undefined) { const v = cleanMoney(b.value); if (v === null) return res.status(400).json({ error: 'value must be a positive number' }); d.value = v; }
-    if (b.expectedClose !== undefined) { const v = cleanDate(b.expectedClose); if (v === null) return res.status(400).json({ error: 'expectedClose is not a valid date' }); d.expectedClose = v; }
+    if (!isObject(b)) return res.status(400).json({ error: 'deal update must be an object' });
+    if (b.title !== undefined && (typeof b.title !== 'string' || !b.title.trim() || b.title.trim().length > 200)) return res.status(400).json({ error: 'title must be 1 to 200 characters' });
+    if (b.notes !== undefined && (typeof b.notes !== 'string' || b.notes.length > 2000)) return res.status(400).json({ error: 'notes must be text no longer than 2000 characters' });
+    if (b.value !== undefined && typeof b.value !== 'number' && typeof b.value !== 'string') return res.status(400).json({ error: 'value must be a number' });
+    if (b.stage !== undefined && !DEAL_STAGES.includes(b.stage)) return res.status(400).json({ error: 'stage is not valid' });
+    if (b.clientId !== undefined && typeof b.clientId !== 'string') return res.status(400).json({ error: 'clientId must be text' });
+    if (b.lostReason !== undefined && (typeof b.lostReason !== 'string' || b.lostReason.length > 300)) return res.status(400).json({ error: 'lostReason must be text no longer than 300 characters' });
+    if (b.title !== undefined) d.title = b.title.trim();
+    if (b.notes !== undefined) d.notes = b.notes;
+    if (b.value !== undefined) { const v = cleanMoney(b.value); if (v === null) return res.status(400).json({ error: 'value must be a non-negative number' }); d.value = v; }
+    if (b.expectedClose !== undefined) { if (b.expectedClose !== '' && typeof b.expectedClose !== 'string') return res.status(400).json({ error: 'expectedClose must be text' }); const v = cleanDate(b.expectedClose); if (v === null) return res.status(400).json({ error: 'expectedClose is not a valid date' }); d.expectedClose = v; }
     if (b.clientId !== undefined) {
       if (b.clientId && !byId(db.clients, b.clientId)) return res.status(400).json({ error: 'client not found' });
       d.clientId = b.clientId || '';
     }
-    if (b.stage && DEAL_STAGES.includes(b.stage) && b.stage !== d.stage) {
+    if (b.stage && b.stage !== d.stage) {
       if (d.clientId) log(db, d.clientId, 'deal', `Deal "${d.title}": ${d.stage} -> ${b.stage}`);
       d.stage = b.stage;
       d.closedAt = b.stage === 'won' || b.stage === 'lost' ? now() : '';
@@ -207,17 +249,24 @@ function mount(app, ctx) {
   // ----- email templates -----
   app.get('/api/templates', (req, res) => res.json(load().templates));
   app.post('/api/templates', (req, res) => {
-    const db = load(), b = req.body || {};
-    const name = str(b.name, 100); if (!name) return res.status(400).json({ error: 'name is required' });
-    const t = { id: uid(), name, subject: str(b.subject, 300), body: str(b.body, 20000), createdAt: now(), updatedAt: now() };
+    const db = load(), b = req.body;
+    if (!isObject(b)) return res.status(400).json({ error: 'template must be an object' });
+    if (typeof b.name !== 'string' || !b.name.trim() || b.name.trim().length > 100) return res.status(400).json({ error: 'name must be 1 to 100 characters' });
+    if (b.subject !== undefined && (typeof b.subject !== 'string' || b.subject.length > 300)) return res.status(400).json({ error: 'subject must be text no longer than 300 characters' });
+    if (b.body !== undefined && (typeof b.body !== 'string' || b.body.length > 20000)) return res.status(400).json({ error: 'body must be text no longer than 20000 characters' });
+    const t = { id: uid(), name: b.name.trim(), subject: b.subject || '', body: b.body || '', createdAt: now(), updatedAt: now() };
     db.templates.push(t); save(db); res.json(t);
   });
   app.put('/api/templates/:id', (req, res) => {
-    const db = load(); const t = byId(db.templates, req.params.id), b = req.body || {};
+    const db = load(); const t = byId(db.templates, req.params.id), b = req.body;
     if (!t) return res.status(404).json({ error: 'not found' });
-    if (b.name !== undefined) { const v = str(b.name, 100); if (!v) return res.status(400).json({ error: 'name is required' }); t.name = v; }
-    if (b.subject !== undefined) t.subject = str(b.subject, 300);
-    if (b.body !== undefined) t.body = str(b.body, 20000);
+    if (!isObject(b)) return res.status(400).json({ error: 'template update must be an object' });
+    if (b.name !== undefined && (typeof b.name !== 'string' || !b.name.trim() || b.name.trim().length > 100)) return res.status(400).json({ error: 'name must be 1 to 100 characters' });
+    if (b.subject !== undefined && (typeof b.subject !== 'string' || b.subject.length > 300)) return res.status(400).json({ error: 'subject must be text no longer than 300 characters' });
+    if (b.body !== undefined && (typeof b.body !== 'string' || b.body.length > 20000)) return res.status(400).json({ error: 'body must be text no longer than 20000 characters' });
+    if (b.name !== undefined) t.name = b.name.trim();
+    if (b.subject !== undefined) t.subject = b.subject;
+    if (b.body !== undefined) t.body = b.body;
     t.updatedAt = now(); save(db); res.json(t);
   });
   app.delete('/api/templates/:id', (req, res) => {

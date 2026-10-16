@@ -2,8 +2,17 @@
 const $ = s => document.querySelector(s);
 const api = async (url, method = 'GET', body) => {
   const r = await fetch('/api' + url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-  return r.json();
+  if (r.status === 401) { location.replace('/login.html'); throw new Error('Please sign in again.'); }
+  let data;
+  try { data = await r.json(); } catch (_) { data = { error: 'The server returned an unreadable response.' }; }
+  if (!r.ok) {
+    const error = new Error(data.error || 'The request could not be completed.');
+    error.name = 'ApiError'; error.status = r.status;
+    throw error;
+  }
+  return data;
 };
+async function logout() { await api('/auth/logout', 'POST', {}); location.replace('/login.html'); }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 const STAGES = { new: 'New', contacted: 'Contacted', replied: 'Replied (Blue)', onboarded: 'Onboarded (Green)', rejected: 'Said No (Red)' };
 const CALLS = { not_called: 'Not called', connected: 'Connected', no_answer: 'No answer', busy: 'Busy', callback: 'Call back' };
@@ -106,7 +115,7 @@ async function renderDashboard() {
       ${listItems(d.rejected, c => esc(c.notes || 'Not interested').slice(0, 90))}
     </div>
     <div class="panel"><h3>Mass Mailing <a onclick="go('mail')">open</a></h3>
-      ${d.campaigns.length ? d.campaigns.map(m => `<div class="item"><b>${esc(m.subject)}</b><small>${fmt(m.at)} · ${m.sent}/${m.total} sent${m.simulated ? ' (simulated)' : ''}${m.failed ? ' · ' + m.failed + ' failed' : ''}</small></div>`).join('') : '<div class="empty">No campaigns sent yet.</div>'}
+      ${d.campaigns.length ? d.campaigns.map(m => `<div class="item"><b>${esc(m.subject)}</b><small>${fmt(m.at)} · ${m.sent}/${m.total} sent${m.simulated ? ' (simulated)' : ''}${m.failed ? ' · ' + m.failed + ' failed' : ''}${m.skipped ? ' · ' + m.skipped + ' skipped' : ''}${m.status === 'sending' ? ' · sending' : m.status === 'interrupted' ? ' · interrupted' : ''}</small></div>`).join('') : '<div class="empty">No campaigns sent yet.</div>'}
       <div class="actions"><button class="btn primary small" onclick="go('mail')">New campaign</button></div>
     </div>
   </div>`;
@@ -131,6 +140,7 @@ function renderList() {
     <td><select onchange="quick('${c.id}',{callStatus:this.value})">${Object.keys(CALLS).map(k => `<option value="${k}" ${c.callStatus === k ? 'selected' : ''}>${CALLS[k]}</option>`).join('')}</select></td>
     <td class="${isLate(c.followUp) ? 'late' : ''}">${fmt(c.followUp)}</td>
     <td><button class="btn small" onclick="openClient('${c.id}')">Open</button>
+      <button class="btn small danger" onclick="delClient('${c.id}')">Delete</button>
       ${c.phone ? `<a class="btn small" href="https://wa.me/${esc(c.phone.replace(/\D/g, ''))}" target="_blank">WhatsApp</a>` : ''}</td>
   </tr>`).join('') || '<tr><td colspan="6" class="empty">No clients in this view.</td></tr>'}
   </tbody></table></div>`;
@@ -158,7 +168,7 @@ async function openClient(id) {
     <div class="full"><label>Notes</label><textarea id="f_notes">${esc(c.notes)}</textarea></div>
   </div>
   <div class="actions">
-    ${id ? `<button class="btn danger" onclick="delClient('${id}')">Delete</button>` : ''}
+    ${id ? `<button class="btn danger" onclick="delClient('${id}')">Delete client</button>` : ''}
     <button class="btn" onclick="closeModal()">Close</button>
     <button class="btn primary" onclick="saveClient('${id || ''}')">Save</button>
   </div>
@@ -181,7 +191,8 @@ async function saveClient(id) {
   };
   if (!body.name) return toast('Name is required');
   // Moving to a closed stage clears reminders on the server; otherwise keep the picked date
-  if (id) await api('/clients/' + id, 'PUT', body); else await api('/clients', 'POST', body);
+  const result = id ? await api('/clients/' + id, 'PUT', body) : await api('/clients', 'POST', body);
+  if (result.error) return toast(result.error);
   closeModal(); await refresh(); toast('Saved'); render();
 }
 async function delClient(id) {
@@ -190,7 +201,8 @@ async function delClient(id) {
 }
 async function addAct(id, type) {
   const note = $('#a_note').value.trim(); if (!note) return;
-  await api(`/clients/${id}/activity`, 'POST', { type, note });
+  const result = await api(`/clients/${id}/activity`, 'POST', { type, note });
+  if (result.error) return toast(result.error);
   await refresh(); openClient(id); renderNav();
 }
 
@@ -207,7 +219,7 @@ async function renderMail() {
     <div class="panel"><h3>New campaign</h3>
       <label>Audience</label>
       <select id="m_aud" onchange="audCount()"><option value="all">All clients with email (excluding Red Zone)</option>
-        ${Object.keys(STAGES).map(k => `<option value="${k}">${STAGES[k]}</option>`).join('')}</select>
+        ${Object.keys(STAGES).filter(k => k !== 'rejected').map(k => `<option value="${k}">${STAGES[k]}</option>`).join('')}</select>
       <div id="m_cnt" class="empty"></div>
       <label>Start from a template</label>
       <select id="m_tpl" onchange="loadTemplate(this.value)"><option value="">- none -</option>${mailTpls.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
@@ -215,10 +227,10 @@ async function renderMail() {
       <label style="margin-top:8px;display:block">Message (use {{name}}, {{company}})</label>
       <textarea id="m_body" style="min-height:180px" placeholder="Hi {{name}},&#10;&#10;..."></textarea>
       ${aiWriterBox('m_sub', 'm_body')}
-      <div class="actions"><button class="btn" onclick="saveAsTemplate()">Save as template</button><button class="btn primary" onclick="sendMail()">Send campaign</button></div>
+      <div class="actions"><button class="btn" onclick="saveAsTemplate()">Save as template</button><button id="mailSendBtn" class="btn primary" onclick="sendMail()">Send campaign</button></div>
     </div>
     <div class="panel"><h3>Campaign history</h3>
-      ${camps.map(m => `<div class="item"><b>${esc(m.subject)}</b><small>${fmt(m.at)} · audience: ${m.audience} · ${m.sent}/${m.total} sent${m.simulated ? ' (simulated)' : ''}${m.failed ? ' · ' + m.failed + ' failed' : ''}</small></div>`).join('') || '<div class="empty">No campaigns yet.</div>'}
+      ${camps.map(m => `<div class="item"><b>${esc(m.subject)}</b><small>${fmt(m.at)} · audience: ${esc(m.audience)} · ${m.sent}/${m.total} sent${m.simulated ? ' (simulated)' : ''}${m.failed ? ' · ' + m.failed + ' failed' : ''}${m.skipped ? ' · ' + m.skipped + ' skipped' : ''}${m.status === 'sending' ? ' · sending' : m.status === 'interrupted' ? ' · interrupted' : ''}</small>${m.errors && m.errors.length ? `<details><summary>${m.errors.length} send error(s)</summary>${m.errors.map(e => `<div class="empty">${esc(e)}</div>`).join('')}</details>` : ''}</div>`).join('') || '<div class="empty">No campaigns yet.</div>'}
     </div>
   </div>`;
   audCount();
@@ -241,11 +253,17 @@ async function sendMail() {
   const subject = $('#m_sub').value.trim(), body = $('#m_body').value.trim();
   if (!subject || !body) return toast('Subject and message are required');
   if (!confirm('Send this campaign now?')) return;
+  const button = $('#mailSendBtn');
+  if (button) button.disabled = true;
+  try {
   toast('Sending... please wait');
   const r = await api('/mail/send', 'POST', { audience: $('#m_aud').value, subject, body });
   if (r.error) return toast(r.error);
-  toast(`Done: ${r.sent}/${r.total} ${r.simulated ? 'simulated' : 'sent'}${r.failed ? ', ' + r.failed + ' failed' : ''}`);
+  toast(`Done: ${r.sent}/${r.total} ${r.simulated ? 'simulated' : 'sent'}${r.failed ? ', ' + r.failed + ' failed' : ''}${r.skipped ? ', ' + r.skipped + ' skipped' : ''}`);
   await refresh(); render();
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 // ---------- settings & import ----------
@@ -262,6 +280,9 @@ async function renderSettings() {
       <div class="full"><label>From (e.g. Right Head &lt;you@company.com&gt;)</label><input id="s_from" value="${esc(s.from)}"></div>
       <div class="full"><label>Secure (SSL, port 465)</label><select id="s_secure"><option value="false" ${s.secure ? '' : 'selected'}>No (STARTTLS, port 587)</option><option value="true" ${s.secure ? 'selected' : ''}>Yes (port 465)</option></select></div>
     </div><div class="actions"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div>
+  <div class="panel"><h3>Database backup</h3>
+    <p class="empty">Download a checkpointed SQLite backup. CRM records and saved credentials in the database are encrypted; keep this backup and the encryption key in separate restricted locations.</p>
+    <div class="actions"><a class="btn primary" href="/api/backup">Download encrypted backup</a></div></div>
   <div class="panel"><h3>Import clients from CSV</h3>
     <p style="font-size:13px;color:var(--muted)">First row must be headers: <code>name,company,phone,email</code>. Duplicates (same email or phone) are skipped.</p>
     <input type="file" id="csvFile" accept=".csv">
@@ -284,14 +305,44 @@ function parseCsv(text) {
     else f += ch;
   }
   cur.push(f); if (cur.some(x => x.trim())) rows.push(cur);
-  const head = rows.shift().map(h => h.trim().toLowerCase());
-  return rows.map(r => Object.fromEntries(head.map((h, i) => [h, (r[i] || '').trim()])));
+  const aliases = {
+    'full name': 'name', 'client name': 'name', 'customer name': 'name', 'contact name': 'name',
+    'company name': 'company', organization: 'company', business: 'company',
+    mobile: 'phone', 'mobile number': 'phone', 'phone number': 'phone', 'contact number': 'phone',
+    'email address': 'email', 'lead source': 'source', 'status': 'stage', 'client status': 'stage', 'lead status': 'stage',
+    'follow up': 'followUp', 'follow-up': 'followUp', 'next follow up': 'followUp', 'next follow-up': 'followUp', 'follow up date': 'followUp',
+    'last reply': 'lastReply', 'latest reply': 'lastReply', 'call status': 'callStatus', 'calling status': 'callStatus'
+  };
+  const head = rows.shift().map(h => {
+    const key = h.replace(/^\uFEFF/, '').trim().toLowerCase();
+    return aliases[key] || key;
+  });
+  return rows.map(r => Object.fromEntries(head.map((h, i) => {
+    const value = (r[i] || '').trim();
+    if (h === 'stage') {
+      const stage = value.toLowerCase().replace(/[\s-]+/g, '_');
+      const stageAliases = { 'new_lead': 'new', fresh: 'new', replied: 'replied', reply: 'replied', converted: 'onboarded', customer: 'onboarded', 'said_no': 'rejected', 'not_interested': 'rejected', lost: 'rejected' };
+      return [h, stageAliases[stage] || stage];
+    }
+    if (h === 'callStatus') return [h, value.toLowerCase().replace(/[\s-]+/g, '_')];
+    return [h, value];
+  })));
 }
 async function importCsv() {
   const f = $('#csvFile').files[0]; if (!f) return toast('Choose a CSV file first');
   const rows = parseCsv(await f.text());
-  const r = await api('/clients/import', 'POST', rows);
-  toast(`Imported ${r.added}, skipped ${r.skipped}`); await refresh(); renderNav();
+  let added = 0, skipped = 0;
+  try {
+    for (let i = 0; i < rows.length; i += 500) {
+      const result = await api('/clients/import', 'POST', rows.slice(i, i + 500));
+      added += result.added; skipped += result.skipped;
+    }
+  } catch (error) {
+    toast(`Partial import: ${added} imported, ${skipped} skipped before the error. ${error.message}`);
+    await refresh(); renderNav(); render();
+    return;
+  }
+  toast(`Imported ${added}, skipped ${skipped}`); await refresh(); renderNav(); render();
 }
 
 // ---------- reminders (browser notifications) ----------
@@ -308,6 +359,11 @@ function toast(msg) {
   const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t);
   setTimeout(() => t.remove(), 3500);
 }
+window.addEventListener('unhandledrejection', event => {
+  console.error('CRM request failed:', event.reason);
+  event.preventDefault();
+  toast(event.reason && event.reason.message ? event.reason.message : 'The request could not be completed.');
+});
 
 (async function init() {
   settings = await api('/settings');

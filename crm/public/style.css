@@ -26,7 +26,8 @@ a.btn{text-decoration:none;color:inherit;display:inline-block}
 a.btn.primary{color:#fff}
 .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
 .btn.primary:hover{background:#1d4ed8}
-.btn.danger{color:var(--red)}
+.btn.danger{color:#b91c1c;background:var(--red-bg);border-color:#fecaca;font-weight:600}
+.btn.danger:hover{background:#fecaca}
 .btn.small{padding:4px 9px;font-size:12px}
 .grid{display:grid;gap:16px}
 .stats{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px}

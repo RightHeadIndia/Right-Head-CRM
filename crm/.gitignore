@@ -1,0 +1,7 @@
+# CRM data and credentials are local runtime data; back them up separately.
+/data/*.sqlite
+/data/*.sqlite-shm
+/data/*.sqlite-wal
+/data/db.json
+/data/db.json.pre-sqlite.bak
+/.env
