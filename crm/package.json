@@ -15,6 +15,7 @@
     "@anthropic-ai/sdk": "^0.134.0",
     "@supabase/supabase-js": "^2.118.0",
     "express": "^4.19.2",
-    "nodemailer": "^6.9.14"
+    "nodemailer": "^6.9.14",
+    "xlsx": "^0.18.5"
   }
 }

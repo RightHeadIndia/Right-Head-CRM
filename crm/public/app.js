@@ -283,10 +283,10 @@ async function renderSettings() {
   <div class="panel"><h3>Database backup</h3>
     <p class="empty">Download a checkpointed SQLite backup. CRM records and saved credentials in the database are encrypted; keep this backup and the encryption key in separate restricted locations.</p>
     <div class="actions"><a class="btn primary" href="/api/backup">Download encrypted backup</a></div></div>
-  <div class="panel"><h3>Import clients from CSV</h3>
-    <p style="font-size:13px;color:var(--muted)">First row must be headers: <code>name,company,phone,email</code>. Duplicates (same email or phone) are skipped.</p>
-    <input type="file" id="csvFile" accept=".csv">
-    <div class="actions"><button class="btn primary" onclick="importCsv()">Import</button>
+  <div class="panel"><h3>Import clients from CSV or Excel</h3>
+    <p style="font-size:13px;color:var(--muted)">First row must be headers. Supported: <code>name,company,phone,email</code> plus <code>S No., Date Added, Link, Company Name, Location, Phone No, Email, Meeting Status, Kanak Notes, Avvni Notes, Email Sent Y/N, Credentials Shared Y/N, Remark, Reminder 1..6</code>. Duplicates (same email or phone) are skipped.</p>
+    <input type="file" id="importFile" accept=".csv,.xlsx,.xls">
+    <div class="actions"><button class="btn primary" onclick="importFile()">Import</button>
     <a class="btn" href="data:text/csv;charset=utf-8,name,company,phone,email%0AAmit Sharma,ABC Traders,9876543210,amit@abc.com" download="sample.csv">Sample CSV</a></div></div>
   </div>`;
 }
@@ -294,6 +294,47 @@ async function saveSettings() {
   await api('/settings', 'PUT', { smtp: { host: $('#s_host').value, port: $('#s_port').value, user: $('#s_user').value, pass: $('#s_pass').value, from: $('#s_from').value, secure: $('#s_secure').value === 'true' } });
   toast('Settings saved');
 }
+// ---------- header matching for CSV / Excel import ----------
+const HEADER_ALIASES = {
+  name: ['name', 'fullname', 'clientname', 'customername', 'contactname', 'contactperson', 'person'],
+  company: ['company', 'companyname', 'organization', 'organisation', 'business', 'businessname', 'firm'],
+  phone: ['phone', 'phoneno', 'phonenumber', 'mobile', 'mobileno', 'mobilenumber', 'contactno', 'contactnumber', 'whatsapp', 'whatsappnumber', 'cell', 'telephone', 'tel'],
+  email: ['email', 'emailid', 'emailaddress', 'mail', 'mailid'],
+  source: ['source', 'leadsource'], link: ['link', 'website', 'url'],
+  stage: ['status', 'clientstatus', 'leadstatus', 'stage'],
+  followUp: ['followup', 'nextfollowup', 'followupdate', 'nextfollowupdate'],
+  lastReply: ['lastreply', 'latestreply'], callStatus: ['callstatus', 'callingstatus'],
+  sno: ['sno', 'srno', 'slno', 'serialno'], dateadded: ['dateadded', 'date', 'addedon'],
+  location: ['location', 'city', 'address'], credentialsshared: ['credentialsshared', 'credentialssharedyn'],
+  remark: ['remark', 'remarks'], notes: ['notes', 'note', 'comments', 'comment'],
+  meetingStatus: ['meetingstatus'], kanakNotes: ['kanaknotes'], avvniNotes: ['avvninotes'], emailSent: ['emailsent', 'emailsentyn']
+};
+for (let n = 1; n <= 12; n++) HEADER_ALIASES['reminder' + n] = ['reminder' + n];
+const HEADER_LOOKUP = {};
+Object.entries(HEADER_ALIASES).forEach(([field, list]) => list.forEach(a => { HEADER_LOOKUP[a] = field; }));
+const STAGE_ALIASES = { new_lead: 'new', fresh: 'new', replied: 'replied', reply: 'replied', converted: 'onboarded', customer: 'onboarded', said_no: 'rejected', not_interested: 'rejected', lost: 'rejected' };
+
+// table = [headerRow, ...dataRows] -> array of objects. Headings are matched ignoring case, spaces, dots and symbols.
+// Columns that are not recognised are kept in r.other so nothing is lost.
+function rowsToObjects(table) {
+  if (!table.length) throw new Error('The file is empty');
+  const clean = h => String(h ?? '').replace(/^﻿/, '').trim();
+  const heads = table.shift().map(clean);
+  const fields = heads.map(h => HEADER_LOOKUP[h.toLowerCase().replace(/[^a-z0-9]/g, '')] || '');
+  return table.map(r => {
+    const o = { other: [] };
+    heads.forEach((h, i) => {
+      const value = String(r[i] ?? '').trim(), f = fields[i];
+      if (!value) return;
+      if (!f || o[f]) { if (h) o.other.push(`${h}: ${value}`); return; } // unknown or repeated column
+      if (f === 'stage') { const s = value.toLowerCase().replace(/[\s-]+/g, '_'); o[f] = STAGE_ALIASES[s] || s; }
+      else if (f === 'callStatus') o[f] = value.toLowerCase().replace(/[\s-]+/g, '_');
+      else o[f] = value;
+    });
+    return o;
+  });
+}
+
 function parseCsv(text) {
   const rows = []; let cur = [], f = '', q = false;
   for (let i = 0; i < text.length; i++) {
@@ -305,32 +346,65 @@ function parseCsv(text) {
     else f += ch;
   }
   cur.push(f); if (cur.some(x => x.trim())) rows.push(cur);
-  const aliases = {
-    'full name': 'name', 'client name': 'name', 'customer name': 'name', 'contact name': 'name',
-    'company name': 'company', organization: 'company', business: 'company',
-    mobile: 'phone', 'mobile number': 'phone', 'phone number': 'phone', 'contact number': 'phone',
-    'email address': 'email', 'lead source': 'source', 'status': 'stage', 'client status': 'stage', 'lead status': 'stage',
-    'follow up': 'followUp', 'follow-up': 'followUp', 'next follow up': 'followUp', 'next follow-up': 'followUp', 'follow up date': 'followUp',
-    'last reply': 'lastReply', 'latest reply': 'lastReply', 'call status': 'callStatus', 'calling status': 'callStatus'
-  };
-  const head = rows.shift().map(h => {
-    const key = h.replace(/^\uFEFF/, '').trim().toLowerCase();
-    return aliases[key] || key;
-  });
-  return rows.map(r => Object.fromEntries(head.map((h, i) => {
-    const value = (r[i] || '').trim();
-    if (h === 'stage') {
-      const stage = value.toLowerCase().replace(/[\s-]+/g, '_');
-      const stageAliases = { 'new_lead': 'new', fresh: 'new', replied: 'replied', reply: 'replied', converted: 'onboarded', customer: 'onboarded', 'said_no': 'rejected', 'not_interested': 'rejected', lost: 'rejected' };
-      return [h, stageAliases[stage] || stage];
-    }
-    if (h === 'callStatus') return [h, value.toLowerCase().replace(/[\s-]+/g, '_')];
-    return [h, value];
-  })));
+  return rowsToObjects(rows);
 }
-async function importCsv() {
-  const f = $('#csvFile').files[0]; if (!f) return toast('Choose a CSV file first');
-  const rows = parseCsv(await f.text());
+async function importFile() {
+  const input = $('#importFile');
+  const f = input.files[0]; if (!f) return toast('Choose a CSV or Excel file first');
+  const name = f.name.toLowerCase();
+  let rows;
+  try {
+    if (name.endsWith('.csv')) {
+      rows = parseCsv(await f.text());
+    } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+      const ab = await f.arrayBuffer();
+      const workbook = XLSX.read(ab, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, raw: false, defval: '' });
+      rows = rowsToObjects(rows);
+    } else {
+      return toast('Please choose a .csv, .xlsx or .xls file');
+    }
+  } catch (error) {
+    return toast('Failed to read file: ' + error.message);
+  }
+
+  // Map imported columns to CRM fields; store extra columns (S No, Date Added, Link,
+  // Location, Credentials Shared, Remark, Reminder 1-6, Meeting Status, Kanak Notes,
+  // Avvni Notes, Email Sent Y/N) in notes so nothing is lost.
+  rows = rows.map(r => {
+    const extras = [];
+    if (r.sno) extras.push(`S No: ${r.sno}`);
+    if (r.dateadded) extras.push(`Date Added: ${r.dateadded}`);
+    if (r.link) extras.push(`Link: ${r.link}`);
+    if (r.location) extras.push(`Location: ${r.location}`);
+    if (r.credentialsshared) extras.push(`Credentials Shared: ${r.credentialsshared}`);
+    if (r.remark) extras.push(`Remark: ${r.remark}`);
+    for (let n = 1; n <= 12; n++) {
+      const v = r['reminder' + n];
+      if (v) extras.push(`Reminder ${n}: ${v}`);
+    }
+    if (r.meetingStatus) extras.push(`Meeting Status: ${r.meetingStatus}`);
+    if (r.kanakNotes) extras.push(`Kanak Notes: ${r.kanakNotes}`);
+    if (r.avvniNotes) extras.push(`Avvni Notes: ${r.avvniNotes}`);
+    if (r.emailSent) extras.push(`Email Sent: ${r.emailSent}`);
+    const existingNotes = r.notes ? String(r.notes).trim() : '';
+    const notes = [existingNotes, ...extras, ...(r.other || [])].filter(Boolean).join(' | ');
+    const validStage = Object.keys(STAGES).includes(r.stage) ? r.stage : 'new';
+    const validCall = Object.keys(CALLS).includes(r.callStatus) ? r.callStatus : 'not_called';
+    const row = {};
+    if (r.name) row.name = r.name || r.company || r.email || r.phone || '';
+    if (r.company) row.company = r.company;
+    if (r.phone) row.phone = r.phone;
+    if (r.email) row.email = r.email;
+    if (r.source || r.link) row.source = r.source || r.link || '';
+    if (notes) row.notes = notes;
+    row.stage = validStage;
+    row.callStatus = validCall;
+    if (r.followUp) row.followUp = r.followUp;
+    return row;
+  });
+
   let added = 0, skipped = 0;
   try {
     for (let i = 0; i < rows.length; i += 500) {

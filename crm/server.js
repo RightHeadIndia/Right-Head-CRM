@@ -144,7 +144,7 @@ function cleanClientInput(value, partial = false) {
   const clean = {};
   for (const [field, limit] of Object.entries(CLIENT_TEXT_LIMITS)) {
     if (value[field] === undefined) continue;
-    if (typeof value[field] !== 'string') return { error: `${field} must be text` };
+    if (typeof value[field] !== 'string') value[field] = String(value[field]);
     const text = value[field].trim();
     if (text.length > limit) return { error: `${field} is too long (maximum ${limit} characters)` };
     clean[field] = text;
