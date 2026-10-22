@@ -81,13 +81,9 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/favicon.ico', (req, res) => {
-  const icoPath = path.join(__dirname, 'public', 'logo.png');
-  if (fs.existsSync(icoPath)) return res.sendFile(icoPath);
-  res.status(204).end();
-});
+app.get('/favicon.ico', (req, res) => res.status(204).end()); // no icon file; stops the browser's 404/redirect
 app.use((req, res, next) => {
-  if (['/login.html', '/login.js', '/login.css', '/logo.png', '/favicon.ico'].includes(req.path)) return next();
+  if (['/login.html', '/login.js', '/login.css'].includes(req.path)) return next();
   if (hasSession(req)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Please log in to continue.' });
   res.redirect('/login.html');
@@ -145,7 +141,7 @@ function log(db, clientId, type, note) {
   db.activities.push({ id: uid(), clientId, type, note: note || '', at: now() });
 }
 
-const CLIENT_TEXT_LIMITS = { name: 200, company: 200, phone: 50, email: 254, source: 500, location: 200, notes: 6000, followUp: 40, lastReply: 6000 };
+const CLIENT_TEXT_LIMITS = { name: 200, company: 200, phone: 50, email: 254, source: 100, notes: 6000, followUp: 40, lastReply: 6000 };
 function cleanClientInput(value, partial = false) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'client data must be an object' };
   const clean = {};
@@ -184,7 +180,7 @@ app.post('/api/clients', (req, res) => {
   const b = result.clean;
   const c = {
     id: uid(), name: b.name, company: b.company || '', phone: b.phone || '', email: b.email || '',
-    source: b.source || '', location: b.location || '', notes: b.notes || '',
+    source: b.source || '', notes: b.notes || '',
     stage: STAGES.includes(b.stage) ? b.stage : 'new',
     callStatus: CALLS.includes(b.callStatus) ? b.callStatus : 'not_called',
     followUp: b.followUp || '', lastReply: '', createdAt: now(), updatedAt: now()
@@ -202,7 +198,7 @@ app.put('/api/clients/:id', (req, res) => {
   const result = cleanClientInput(req.body, true);
   if (result.error) return res.status(400).json({ error: result.error });
   const b = result.clean;
-  const fields = ['name', 'company', 'phone', 'email', 'source', 'location', 'notes', 'followUp', 'lastReply'];
+  const fields = ['name', 'company', 'phone', 'email', 'source', 'notes', 'followUp', 'lastReply'];
   fields.forEach(f => { if (b[f] !== undefined) c[f] = b[f]; });
   if (b.stage && b.stage !== c.stage) {
     log(db, c.id, 'stage', `Stage: ${c.stage} -> ${b.stage}`);
@@ -284,16 +280,11 @@ app.post('/api/clients/import', (req, res) => {
     const email = String(r.email || '').toLowerCase(), phone = digits(r.phone);
     const dup = db.clients.find(c => (email && String(c.email || '').toLowerCase() === email) || (phone && digits(c.phone) === phone));
     if (dup) return skip('same email or phone already exists');
-    let clientCreatedAt = now();
-    const possibleDate = raw.createdAt || raw.dateAdded;
-    if (possibleDate && !Number.isNaN(new Date(possibleDate).getTime())) {
-      clientCreatedAt = new Date(possibleDate).toISOString();
-    }
     const c = {
       id: uid(), name: r.name, company: r.company || '', phone: r.phone || '', email: r.email || '',
-      source: r.source || 'import', location: r.location || '', notes: r.notes || '',
+      source: r.source || 'import', notes: r.notes || '',
       stage: STAGES.includes(raw.stage) ? raw.stage : 'new', callStatus: CALLS.includes(raw.callStatus) ? raw.callStatus : 'not_called',
-      followUp: r.followUp || '', lastReply: r.lastReply || '', createdAt: clientCreatedAt, updatedAt: now()
+      followUp: r.followUp || '', lastReply: r.lastReply || '', createdAt: now(), updatedAt: now()
     };
     db.clients.push(c);
     log(db, c.id, 'created', 'Imported');
@@ -396,11 +387,56 @@ app.get('/api/mail/audience/:key', (req, res) => {
 
 app.get('/api/campaigns', (req, res) => res.json(load().campaigns.slice().reverse()));
 
+// One place that builds the SMTP connection so single mail, mass mail and the
+// "Test connection" button all behave the same.
+function buildTransport(s) {
+  const port = Number(s.port) || 587;
+  const host = String(s.host || '').trim();
+  // Port 465 is always implicit SSL; any other port uses STARTTLS. A wrong
+  // "Secure" choice is the most common cause of hanging / "wrong version number" errors.
+  const secure = port === 465 ? true : (port === 587 || port === 25 ? false : !!s.secure);
+  // Gmail shows App Passwords as "abcd efgh ijkl mnop"; the spaces are not part of it.
+  const pass = /gmail|googlemail/i.test(host) ? String(s.pass || '').replace(/\s+/g, '') : String(s.pass || '');
+  return nodemailer.createTransport({
+    host, port, secure,
+    requireTLS: !secure && port !== 25,
+    auth: { user: String(s.user || '').trim(), pass },
+    connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 30000, // never hang forever
+    tls: { servername: host }
+  });
+}
+
+// Turn Nodemailer errors into something a person can act on.
+function smtpErrorMessage(e) {
+  const code = e && e.code, resp = (e && e.response) || '', msg = String((e && e.message) || 'unknown error');
+  if (code === 'EAUTH' || /535|534|auth/i.test(resp + msg)) return 'Login rejected. For Gmail use an App Password (Google Account > Security > 2-Step Verification > App passwords), not your normal password, and the username must be the full email address.';
+  if (code === 'ENOTFOUND' || code === 'EDNS') return 'SMTP host not found. Check the spelling (e.g. smtp.gmail.com) - it must be a server name, not an email address.';
+  if (code === 'ECONNREFUSED') return 'Connection refused. Check the port (587 for STARTTLS, 465 for SSL) - your host may also block outgoing mail ports.';
+  if (code === 'ETIMEDOUT' || code === 'ESOCKET' && /timed? ?out/i.test(msg) || code === 'ECONNECTION' && /timed? ?out/i.test(msg)) return 'Connection timed out. The server or your hosting provider is probably blocking this port; try the other port (587 / 465) or ask your host to allow outgoing SMTP.';
+  if (/wrong version number|ssl routines|packet length/i.test(msg)) return 'SSL/TLS mismatch. Use port 587 with Secure = No, or port 465 with Secure = Yes.';
+  if (/self.signed|certificate|altnames/i.test(msg)) return 'The mail server certificate was rejected: ' + msg;
+  if (code === 'EENVELOPE' || /Invalid (recipient|sender)|From/i.test(msg) && /address/i.test(msg)) return 'Sender or recipient address is invalid: ' + msg;
+  return msg.slice(0, 300);
+}
+
 function smtpTransport(db) {
   const s = db.settings.smtp;
   if (!(s.host && s.user && s.pass)) return null; // not configured -> simulation mode
-  return nodemailer.createTransport({ host: s.host, port: Number(s.port) || 587, secure: !!s.secure, auth: { user: s.user, pass: s.pass } });
+  return buildTransport(s);
 }
+
+// Checks host, port, TLS and login without sending anything.
+app.post('/api/mail/test', asyncRoute(async (req, res) => {
+  const s = load().settings.smtp;
+  if (!(s.host && s.user && s.pass)) return res.status(400).json({ error: 'Fill in host, username and password, save, then test.' });
+  try {
+    await buildTransport(s).verify();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('SMTP test failed:', e.code || '', e.message);
+    res.status(502).json({ error: smtpErrorMessage(e), code: e.code || null });
+  }
+}));
 
 // Send one email to one client (used by the AI "Draft message" box after the user reviews the text)
 app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
@@ -417,8 +453,8 @@ app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
     try {
       await transporter.sendMail({ from: db.settings.smtp.from || db.settings.smtp.user, to: c.email, subject: cleanSubject, text: body, html: esc(body).replace(/\n/g, '<br>') });
     } catch (error) {
-      console.error('Single email send failed:', error.message);
-      return res.status(502).json({ error: 'Email send failed. Check the SMTP settings and try again.' });
+      console.error('Single email send failed:', error.code || '', error.message);
+      return res.status(502).json({ error: 'Email send failed: ' + smtpErrorMessage(error) });
     }
   }
   // Sending is asynchronous; reload before recording so unrelated edits made
@@ -448,9 +484,7 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
   const simulate = dryRun === true || !configured;
   let transporter;
   if (!simulate) {
-    transporter = nodemailer.createTransport({
-      host: s.host, port: Number(s.port) || 587, secure: !!s.secure, auth: { user: s.user, pass: s.pass }
-    });
+    transporter = buildTransport(s);
   }
   massMailInProgress = true;
   try {
@@ -490,7 +524,7 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
       }
       sent++;
       delivered = true;
-    } catch (e) { failed++; errors.push(`${recipient.email}: ${String(e.message || 'send failed').slice(0, 300)}`); }
+    } catch (e) { failed++; errors.push(`${recipient.email}: ${smtpErrorMessage(e)}`); }
 
     updateRecords(database, ({ get, set }) => {
       const running = get('campaigns', camp.id);

@@ -311,6 +311,7 @@ async function renderSettings() {
       </div>
       <div class="actions">
         <button class="btn primary" onclick="saveSettings()">Save Email Settings</button>
+        <button class="btn" id="smtpTestBtn" onclick="testSmtp()">Save &amp; Test Connection</button>
       </div>
     </div>
 
@@ -387,6 +388,15 @@ async function renderSettings() {
 async function saveSettings() {
   await api('/settings', 'PUT', { smtp: { host: $('#s_host').value, port: $('#s_port').value, user: $('#s_user').value, pass: $('#s_pass').value, from: $('#s_from').value, secure: $('#s_secure').value === 'true' } });
   toast('Settings saved');
+}
+async function testSmtp() {
+  const btn = $('#smtpTestBtn'); btn.disabled = true; btn.textContent = 'Testing...';
+  try {
+    await saveSettings();
+    await api('/mail/test', 'POST', {});
+    toast('SMTP connection works - login accepted');
+  } catch (e) { toast(e.message); }
+  btn.disabled = false; btn.textContent = 'Save & Test Connection';
 }
 // ---------- header matching for CSV / Excel import ----------
 const HEADER_ALIASES = {
