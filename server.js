@@ -1,4 +1,5 @@
-// Company CRM - Express server with local SQLite storage.
+
+ // Company CRM - Express server with local SQLite storage.
 const express = require('express');
 const fs = require('node:fs');
 const path = require('path');
@@ -141,29 +142,67 @@ function log(db, clientId, type, note) {
   db.activities.push({ id: uid(), clientId, type, note: note || '', at: now() });
 }
 
-const CLIENT_TEXT_LIMITS = { name: 200, company: 200, phone: 50, email: 254, source: 100, notes: 6000, followUp: 40, lastReply: 6000 };
+const CLIENT_TEXT_LIMITS = {
+  name: 200,
+  company: 200,
+  location: 200,
+  phone: 50,
+  email: 254,
+  source: 300,
+  notes: 6000,
+  followUp: 40,
+  lastReply: 6000
+};
+
 function cleanClientInput(value, partial = false) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'client data must be an object' };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { error: 'client data must be an object' };
+  }
+
   const clean = {};
+
   for (const [field, limit] of Object.entries(CLIENT_TEXT_LIMITS)) {
     if (value[field] === undefined) continue;
-    if (typeof value[field] !== 'string') value[field] = String(value[field]);
-    const text = value[field].trim();
-    if (text.length > limit) return { error: `${field} is too long (maximum ${limit} characters)` };
+
+    const text = String(value[field]).trim();
+
+    if (text.length > limit) {
+      return { error: `${field} is too long (maximum ${limit} characters)` };
+    }
+
     clean[field] = text;
   }
-  if (!partial && !clean.name) return { error: 'name is required' };
-  if (clean.name !== undefined && !clean.name) return { error: 'name is required' };
-  if (clean.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean.email)) return { error: 'email is not valid' };
-  if (clean.followUp && Number.isNaN(new Date(clean.followUp).getTime())) return { error: 'followUp is not a valid date-time' };
+
+  if (!partial && !clean.name) {
+    return { error: 'name is required' };
+  }
+
+  if (clean.name !== undefined && !clean.name) {
+    return { error: 'name is required' };
+  }
+
+  if (clean.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean.email)) {
+    return { error: 'email is not valid' };
+  }
+
+  if (clean.followUp && Number.isNaN(new Date(clean.followUp).getTime())) {
+    return { error: 'followUp is not a valid date-time' };
+  }
+
   if (value.stage !== undefined) {
-    if (!STAGES.includes(value.stage)) return { error: 'stage is not valid' };
+    if (!STAGES.includes(value.stage)) {
+      return { error: 'stage is not valid' };
+    }
     clean.stage = value.stage;
   }
+
   if (value.callStatus !== undefined) {
-    if (!CALLS.includes(value.callStatus)) return { error: 'callStatus is not valid' };
+    if (!CALLS.includes(value.callStatus)) {
+      return { error: 'callStatus is not valid' };
+    }
     clean.callStatus = value.callStatus;
   }
+
   return { clean };
 }
 
@@ -175,43 +214,99 @@ app.get('/api/clients', (req, res) => {
 
 app.post('/api/clients', (req, res) => {
   const db = load();
-  const result = cleanClientInput(req.body);
-  if (result.error) return res.status(400).json({ error: result.error });
+  const raw = req.body || {};
+  const result = cleanClientInput(raw);
+
+  if (result.error) {
+    return res.status(400).json({ error: result.error });
+  }
+
   const b = result.clean;
+
+  const createdAt =
+    raw.dateAdded && !Number.isNaN(new Date(raw.dateAdded).getTime())
+      ? new Date(raw.dateAdded).toISOString()
+      : now();
+
   const c = {
-    id: uid(), name: b.name, company: b.company || '', phone: b.phone || '', email: b.email || '',
-    source: b.source || '', notes: b.notes || '',
-    stage: STAGES.includes(b.stage) ? b.stage : 'new',
-    callStatus: CALLS.includes(b.callStatus) ? b.callStatus : 'not_called',
-    followUp: b.followUp || '', lastReply: '', createdAt: now(), updatedAt: now()
+    id: uid(),
+    name: b.name,
+    company: b.company || '',
+    location: b.location || '',
+    phone: b.phone || '',
+    email: b.email || '',
+    source: b.source || '',
+    notes: b.notes || '',
+    stage: b.stage || 'new',
+    callStatus: b.callStatus || 'not_called',
+    followUp: b.followUp || '',
+    lastReply: b.lastReply || '',
+    createdAt,
+    updatedAt: now()
   };
+
   db.clients.push(c);
   log(db, c.id, 'created', 'Client added');
   save(db);
+
   res.json(c);
 });
 
 app.put('/api/clients/:id', (req, res) => {
   const db = load();
   const c = db.clients.find(x => x.id === req.params.id);
-  if (!c) return res.status(404).json({ error: 'not found' });
+
+  if (!c) {
+    return res.status(404).json({ error: 'not found' });
+  }
+
   const result = cleanClientInput(req.body, true);
-  if (result.error) return res.status(400).json({ error: result.error });
+
+  if (result.error) {
+    return res.status(400).json({ error: result.error });
+  }
+
   const b = result.clean;
-  const fields = ['name', 'company', 'phone', 'email', 'source', 'notes', 'followUp', 'lastReply'];
-  fields.forEach(f => { if (b[f] !== undefined) c[f] = b[f]; });
+
+  const fields = [
+    'name',
+    'company',
+    'location',
+    'phone',
+    'email',
+    'source',
+    'notes',
+    'followUp',
+    'lastReply'
+  ];
+
+  fields.forEach(field => {
+    if (b[field] !== undefined) {
+      c[field] = b[field];
+    }
+  });
+
   if (b.stage && b.stage !== c.stage) {
     log(db, c.id, 'stage', `Stage: ${c.stage} -> ${b.stage}`);
     c.stage = b.stage;
-    if (b.stage === 'onboarded' || b.stage === 'rejected') c.followUp = ''; // no more reminders
+
+    if (b.stage === 'onboarded' || b.stage === 'rejected') {
+      c.followUp = '';
+    }
   }
+
   if (b.callStatus && b.callStatus !== c.callStatus) {
     log(db, c.id, 'call', `Call status: ${b.callStatus}`);
     c.callStatus = b.callStatus;
-    if (c.stage === 'new') c.stage = 'contacted';
+
+    if (c.stage === 'new') {
+      c.stage = 'contacted';
+    }
   }
+
   c.updatedAt = now();
   save(db);
+
   res.json(c);
 });
 
@@ -220,76 +315,167 @@ app.delete('/api/clients/:id', (req, res) => {
   db.clients = db.clients.filter(x => x.id !== req.params.id);
   db.activities = db.activities.filter(a => a.clientId !== req.params.id);
   db.tasks = db.tasks.filter(t => t.clientId !== req.params.id);
-  db.deals.forEach(d => { if (d.clientId === req.params.id) d.clientId = ''; }); // keep deals so revenue history stays intact
+  db.deals.forEach(d => {
+    if (d.clientId === req.params.id) d.clientId = '';
+  });
   save(db);
   res.json({ ok: true });
 });
 
 app.get('/api/clients/:id/activities', (req, res) => {
   const db = load();
-  res.json(db.activities.filter(a => a.clientId === req.params.id).sort((a, b) => b.at.localeCompare(a.at)));
+  res.json(
+    db.activities
+      .filter(a => a.clientId === req.params.id)
+      .sort((a, b) => b.at.localeCompare(a.at))
+  );
 });
 
 // Add a note / record a client reply. type: note | reply | call
 app.post('/api/clients/:id/activity', (req, res) => {
   const db = load();
   const c = db.clients.find(x => x.id === req.params.id);
-  if (!c) return res.status(404).json({ error: 'not found' });
+
+  if (!c) {
+    return res.status(404).json({ error: 'not found' });
+  }
+
   const { type = 'note', note = '' } = req.body || {};
-  if (!['note', 'reply', 'call'].includes(type)) return res.status(400).json({ error: 'activity type is not valid' });
-  if (typeof note !== 'string' || note.length > 6000) return res.status(400).json({ error: 'activity note must be text no longer than 6000 characters' });
+
+  if (!['note', 'reply', 'call'].includes(type)) {
+    return res.status(400).json({ error: 'activity type is not valid' });
+  }
+
+  if (typeof note !== 'string' || note.length > 6000) {
+    return res.status(400).json({
+      error: 'activity note must be text no longer than 6000 characters'
+    });
+  }
+
   log(db, c.id, type, note);
+
   if (type === 'reply') {
     c.lastReply = note;
-    if (c.stage !== 'onboarded' && c.stage !== 'rejected') c.stage = 'replied'; // goes BLUE
+
+    if (c.stage !== 'onboarded' && c.stage !== 'rejected') {
+      c.stage = 'replied';
+    }
   }
+
   c.updatedAt = now();
   save(db);
   res.json(c);
 });
 
-// Bulk import: [{name, company, phone, email, ...}, ...]
-// Forgiving by design: a value that fails validation is moved into Notes instead of discarding the whole client.
+ // Bulk import: [{name, company, phone, email, ...}]
+// Forgiving by design: invalid values are moved into Notes instead of discarding the whole client.
 app.post('/api/clients/import', (req, res) => {
-  if (!Array.isArray(req.body)) return res.status(400).json({ error: 'request must be an array of clients' });
-  if (req.body.length > 10000) return res.status(413).json({ error: 'import is limited to 10000 rows at a time' });
+  if (!Array.isArray(req.body)) {
+    return res.status(400).json({ error: 'request must be an array of clients' });
+  }
+
+  if (req.body.length > 10000) {
+    return res.status(413).json({ error: 'import is limited to 10000 rows at a time' });
+  }
+
   const db = load();
-  let added = 0, skipped = 0;
+  let added = 0;
+  let skipped = 0;
   const reasons = {};
-  const skip = why => { skipped++; reasons[why] = (reasons[why] || 0) + 1; };
-  // +91 98765 43210 and 098765 43210 and 9876543210 are the same number: compare the last 10 digits
-  const digits = v => { const d = String(v || '').replace(/\D/g, ''); return d.length > 10 ? d.slice(-10) : d; };
+
+  const skip = why => {
+    skipped++;
+    reasons[why] = (reasons[why] || 0) + 1;
+  };
+
+  // Compare phone numbers using their last 10 digits.
+  const digits = value => {
+    const d = String(value || '').replace(/\D/g, '');
+    return d.length > 10 ? d.slice(-10) : d;
+  };
+
   req.body.forEach(raw => {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return skip('row is not valid');
-    const r = {}, extra = [];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return skip('row is not valid');
+    }
+
+    const r = {};
+    const extra = [];
+
     for (const [field, limit] of Object.entries(CLIENT_TEXT_LIMITS)) {
       if (raw[field] === undefined || raw[field] === null) continue;
+
       const text = String(raw[field]).trim();
-      if (text) r[field] = text.slice(0, limit); // over-long text is cut, not rejected
+      if (text) r[field] = text.slice(0, limit);
     }
+
     if (r.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email)) {
-      const found = r.email.match(/[^\s@,;/<>]+@[^\s@,;/<>]+\.[^\s@,;/<>]+/); // e.g. "a@x.com / b@x.com" -> keep the first one
+      const found = r.email.match(/[^\s@,;/<>]+@[^\s@,;/<>]+\.[^\s@,;/<>]+/);
       extra.push(`Email as written: ${r.email}`);
-      if (found) r.email = found[0]; else delete r.email;
+      if (found) r.email = found[0];
+      else delete r.email;
     }
-    if (r.phone && !/\d/.test(r.phone)) { extra.push(`Phone as written: ${r.phone}`); delete r.phone; }
-    if (r.followUp && Number.isNaN(new Date(r.followUp).getTime())) { extra.push(`Follow-up as written: ${r.followUp}`); delete r.followUp; }
-    if (extra.length) r.notes = [r.notes, ...extra].filter(Boolean).join(' | ').slice(0, CLIENT_TEXT_LIMITS.notes);
+
+    if (r.phone && !/\d/.test(r.phone)) {
+      extra.push(`Phone as written: ${r.phone}`);
+      delete r.phone;
+    }
+
+    if (r.followUp && Number.isNaN(new Date(r.followUp).getTime())) {
+      extra.push(`Follow-up as written: ${r.followUp}`);
+      delete r.followUp;
+    }
+
+    if (extra.length) {
+      r.notes = [r.notes, ...extra].filter(Boolean).join(' | ')
+        .slice(0, CLIENT_TEXT_LIMITS.notes);
+    }
+
     if (!r.name) r.name = r.company || r.email || r.phone || '';
-    if (!r.name) return skip('no name, company, email or phone in the row');
-    const email = String(r.email || '').toLowerCase(), phone = digits(r.phone);
-    const dup = db.clients.find(c => (email && String(c.email || '').toLowerCase() === email) || (phone && digits(c.phone) === phone));
-    if (dup) return skip('same email or phone already exists');
+
+    if (!r.name) {
+      return skip('no name, company, email or phone in the row');
+    }
+
+    const email = String(r.email || '').toLowerCase();
+    const phone = digits(r.phone);
+
+    const dup = db.clients.find(c =>
+      (email && String(c.email || '').toLowerCase() === email) ||
+      (phone && digits(c.phone) === phone)
+    );
+
+    if (dup) {
+      return skip('same email or phone already exists');
+    }
+
+    const createdAt =
+      raw.dateAdded && !Number.isNaN(new Date(raw.dateAdded).getTime())
+        ? new Date(raw.dateAdded).toISOString()
+        : now();
+
     const c = {
-      id: uid(), name: r.name, company: r.company || '', phone: r.phone || '', email: r.email || '',
-      source: r.source || 'import', notes: r.notes || '',
-      stage: STAGES.includes(raw.stage) ? raw.stage : 'new', callStatus: CALLS.includes(raw.callStatus) ? raw.callStatus : 'not_called',
-      followUp: r.followUp || '', lastReply: r.lastReply || '', createdAt: now(), updatedAt: now()
+      id: uid(),
+      name: r.name,
+      company: r.company || '',
+      location: r.location || '',
+      phone: r.phone || '',
+      email: r.email || '',
+      source: r.source || 'import',
+      notes: r.notes || '',
+      stage: STAGES.includes(raw.stage) ? raw.stage : 'new',
+      callStatus: CALLS.includes(raw.callStatus) ? raw.callStatus : 'not_called',
+      followUp: r.followUp || '',
+      lastReply: r.lastReply || '',
+      createdAt,
+      updatedAt: now()
     };
+
     db.clients.push(c);
     log(db, c.id, 'created', 'Imported');
     added++;
   });
+
   save(db);
   res.json({ added, skipped, reasons });
 });
@@ -298,21 +484,53 @@ app.post('/api/clients/import', (req, res) => {
 app.get('/api/dashboard', (req, res) => {
   const db = load();
   const cs = db.clients;
-  const today = new Date(); today.setHours(23, 59, 59, 999);
-  const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
-  const active = cs.filter(c => c.followUp && c.stage !== 'onboarded' && c.stage !== 'rejected');
-  const due = active.filter(c => new Date(c.followUp) <= today).sort((a, b) => a.followUp.localeCompare(b.followUp));
-  const calls = {}; CALLS.forEach(k => (calls[k] = cs.filter(c => c.callStatus === k).length));
-  const stages = {}; STAGES.forEach(k => (stages[k] = cs.filter(c => c.stage === k).length));
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+
+  const startToday = new Date();
+  startToday.setHours(0, 0, 0, 0);
+
+  const active = cs.filter(c =>
+    c.followUp && c.stage !== 'onboarded' && c.stage !== 'rejected'
+  );
+
+  const due = active
+    .filter(c => new Date(c.followUp) <= today)
+    .sort((a, b) => a.followUp.localeCompare(b.followUp));
+
+  const calls = {};
+  CALLS.forEach(k => {
+    calls[k] = cs.filter(c => c.callStatus === k).length;
+  });
+
+  const stages = {};
+  STAGES.forEach(k => {
+    stages[k] = cs.filter(c => c.stage === k).length;
+  });
+
   res.json({
-    total: cs.length, stages, calls,
+    total: cs.length,
+    stages,
+    calls,
     overdue: due.filter(c => new Date(c.followUp) < startToday).length,
     dueToday: due.filter(c => new Date(c.followUp) >= startToday).length,
     reminders: due.slice(0, 8),
-    upcoming: active.filter(c => new Date(c.followUp) > today).sort((a, b) => a.followUp.localeCompare(b.followUp)).slice(0, 5),
-    replied: cs.filter(c => c.stage === 'replied').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6),
-    onboarded: cs.filter(c => c.stage === 'onboarded').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6),
-    rejected: cs.filter(c => c.stage === 'rejected').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6),
+    upcoming: active
+      .filter(c => new Date(c.followUp) > today)
+      .sort((a, b) => a.followUp.localeCompare(b.followUp))
+      .slice(0, 5),
+    replied: cs
+      .filter(c => c.stage === 'replied')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 6),
+    onboarded: cs
+      .filter(c => c.stage === 'onboarded')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 6),
+    rejected: cs
+      .filter(c => c.stage === 'rejected')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 6),
     campaigns: db.campaigns.slice(-4).reverse()
   });
 });
@@ -320,256 +538,468 @@ app.get('/api/dashboard', (req, res) => {
 // ---------- settings ----------
 app.get('/api/settings', (req, res) => {
   const s = load().settings;
-  res.json({ ...s, smtp: { ...s.smtp, pass: s.smtp.pass ? '********' : '' }, ai: { model: s.ai.model, apiKey: s.ai.apiKey ? '********' : '' } });
+
+  res.json({
+    ...s,
+    smtp: { ...s.smtp, pass: s.smtp.pass ? '********' : '' },
+    ai: {
+      model: s.ai.model,
+      apiKey: s.ai.apiKey ? '********' : ''
+    }
+  });
 });
+
 app.put('/api/settings', (req, res) => {
   const db = load();
   const b = req.body;
-  if (!b || typeof b !== 'object' || Array.isArray(b)) return res.status(400).json({ error: 'settings must be an object' });
+
+  if (!b || typeof b !== 'object' || Array.isArray(b)) {
+    return res.status(400).json({ error: 'settings must be an object' });
+  }
+
   if (b.company !== undefined) {
-    if (typeof b.company !== 'string' || b.company.trim().length > 120) return res.status(400).json({ error: 'company must be text no longer than 120 characters' });
+    if (typeof b.company !== 'string' || b.company.trim().length > 120) {
+      return res.status(400).json({ error: 'company must be text no longer than 120 characters' });
+    }
     db.settings.company = b.company.trim();
   }
+
   if (b.currency !== undefined) {
-    if (typeof b.currency !== 'string' || !b.currency.trim() || b.currency.trim().length > 4) return res.status(400).json({ error: 'currency must be 1 to 4 characters' });
+    if (typeof b.currency !== 'string' || !b.currency.trim() || b.currency.trim().length > 4) {
+      return res.status(400).json({ error: 'currency must be 1 to 4 characters' });
+    }
     db.settings.currency = b.currency.trim();
   }
+
   if (b.ai) {
-    if (typeof b.ai !== 'object' || Array.isArray(b.ai)) return res.status(400).json({ error: 'AI settings must be an object' });
+    if (typeof b.ai !== 'object' || Array.isArray(b.ai)) {
+      return res.status(400).json({ error: 'AI settings must be an object' });
+    }
+
     if (b.ai.apiKey !== undefined && b.ai.apiKey !== '********') {
-      if (typeof b.ai.apiKey !== 'string' || b.ai.apiKey.trim().length > 500) return res.status(400).json({ error: 'AI key must be text no longer than 500 characters' });
+      if (typeof b.ai.apiKey !== 'string' || b.ai.apiKey.trim().length > 500) {
+        return res.status(400).json({ error: 'AI key must be text no longer than 500 characters' });
+      }
       db.settings.ai.apiKey = b.ai.apiKey.trim();
     }
+
     if (b.ai.model !== undefined) {
-      if (typeof b.ai.model !== 'string' || b.ai.model.trim().length > 80) return res.status(400).json({ error: 'AI model must be text no longer than 80 characters' });
+      if (typeof b.ai.model !== 'string' || b.ai.model.trim().length > 80) {
+        return res.status(400).json({ error: 'AI model must be text no longer than 80 characters' });
+      }
       db.settings.ai.model = b.ai.model.trim();
     }
   }
+
   if (b.smtp) {
-    if (typeof b.smtp !== 'object' || Array.isArray(b.smtp)) return res.status(400).json({ error: 'SMTP settings must be an object' });
+    if (typeof b.smtp !== 'object' || Array.isArray(b.smtp)) {
+      return res.status(400).json({ error: 'SMTP settings must be an object' });
+    }
+
     const stringFields = { host: 255, user: 320, pass: 1000, from: 320 };
     const clean = {};
+
     for (const [field, limit] of Object.entries(stringFields)) {
-      if (b.smtp[field] === undefined || (field === 'pass' && b.smtp.pass === '********')) continue;
-      if (typeof b.smtp[field] !== 'string' || b.smtp[field].length > limit) return res.status(400).json({ error: `${field} must be text no longer than ${limit} characters` });
+      if (b.smtp[field] === undefined ||
+          (field === 'pass' && b.smtp.pass === '********')) continue;
+
+      if (typeof b.smtp[field] !== 'string' || b.smtp[field].length > limit) {
+        return res.status(400).json({
+          error: `${field} must be text no longer than ${limit} characters`
+        });
+      }
+
       clean[field] = field === 'pass' ? b.smtp[field] : b.smtp[field].trim();
     }
+
     if (b.smtp.port !== undefined) {
       const port = Number(b.smtp.port);
-      if (!Number.isInteger(port) || port < 1 || port > 65535) return res.status(400).json({ error: 'SMTP port must be between 1 and 65535' });
+
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        return res.status(400).json({ error: 'SMTP port must be between 1 and 65535' });
+      }
+
       clean.port = port;
     }
+
     if (b.smtp.secure !== undefined) {
-      if (typeof b.smtp.secure !== 'boolean') return res.status(400).json({ error: 'SMTP secure must be true or false' });
+      if (typeof b.smtp.secure !== 'boolean') {
+        return res.status(400).json({ error: 'SMTP secure must be true or false' });
+      }
+
       clean.secure = b.smtp.secure;
     }
+
     const keepPass = b.smtp.pass === '********' || b.smtp.pass === undefined;
-    db.settings.smtp = { ...db.settings.smtp, ...clean, pass: keepPass ? db.settings.smtp.pass : clean.pass };
+
+    db.settings.smtp = {
+      ...db.settings.smtp,
+      ...clean,
+      pass: keepPass ? db.settings.smtp.pass : clean.pass
+    };
   }
+
   save(db);
   res.json({ ok: true });
 });
 
-// ---------- mass mailing ----------
-const fill = (t, c) => String(t).replace(/{{\s*(name|company|email|phone)\s*}}/gi, (_, k) => c[k.toLowerCase()] || '');
-const esc = s => String(s).replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
+ // ---------- mass mailing ----------
+const fill = (t, c) =>
+  String(t).replace(/{{\s*(name|company|email|phone)\s*}}/gi,
+    (_, k) => c[k.toLowerCase()] || '');
+
+const esc = s =>
+  String(s).replace(/[&<>]/g, m => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;'
+  }[m]));
 
 function audience(db, audienceKey) {
-  let list = db.clients.filter(c => c.email && c.stage !== 'rejected'); // a refusal suppresses every campaign audience
+  let list = db.clients.filter(c => c.email && c.stage !== 'rejected');
   if (audienceKey === 'all') return list;
-  else list = list.filter(c => c.stage === audienceKey);
-  return list;
+  return list.filter(c => c.stage === audienceKey);
 }
 
 app.get('/api/mail/audience/:key', (req, res) => {
   res.json({ count: audience(load(), req.params.key).length });
 });
 
-app.get('/api/campaigns', (req, res) => res.json(load().campaigns.slice().reverse()));
+app.get('/api/campaigns', (req, res) => {
+  res.json(load().campaigns.slice().reverse());
+});
 
-// One place that builds the SMTP connection so single mail, mass mail and the
-// "Test connection" button all behave the same.
 function buildTransport(s) {
   const port = Number(s.port) || 587;
   const host = String(s.host || '').trim();
-  // Port 465 is always implicit SSL; any other port uses STARTTLS. A wrong
-  // "Secure" choice is the most common cause of hanging / "wrong version number" errors.
-  const secure = port === 465 ? true : (port === 587 || port === 25 ? false : !!s.secure);
-  // Gmail shows App Passwords as "abcd efgh ijkl mnop"; the spaces are not part of it.
-  const pass = /gmail|googlemail/i.test(host) ? String(s.pass || '').replace(/\s+/g, '') : String(s.pass || '');
+  const secure = port === 465 ? true :
+    (port === 587 || port === 25 ? false : !!s.secure);
+  const pass = /gmail|googlemail/i.test(host)
+    ? String(s.pass || '').replace(/\s+/g, '')
+    : String(s.pass || '');
+
   return nodemailer.createTransport({
-    host, port, secure,
+    host,
+    port,
+    secure,
     requireTLS: !secure && port !== 25,
     auth: { user: String(s.user || '').trim(), pass },
-    connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 30000, // never hang forever
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 30000,
     tls: { servername: host }
   });
 }
 
-// Turn Nodemailer errors into something a person can act on.
 function smtpErrorMessage(e) {
-  const code = e && e.code, resp = (e && e.response) || '', msg = String((e && e.message) || 'unknown error');
-  if (code === 'EAUTH' || /535|534|auth/i.test(resp + msg)) return 'Login rejected. For Gmail use an App Password (Google Account > Security > 2-Step Verification > App passwords), not your normal password, and the username must be the full email address.';
-  if (code === 'ENOTFOUND' || code === 'EDNS') return 'SMTP host not found. Check the spelling (e.g. smtp.gmail.com) - it must be a server name, not an email address.';
-  if (code === 'ECONNREFUSED') return 'Connection refused. Check the port (587 for STARTTLS, 465 for SSL) - your host may also block outgoing mail ports.';
-  if (code === 'ETIMEDOUT' || code === 'ESOCKET' && /timed? ?out/i.test(msg) || code === 'ECONNECTION' && /timed? ?out/i.test(msg)) return 'Connection timed out. The server or your hosting provider is probably blocking this port; try the other port (587 / 465) or ask your host to allow outgoing SMTP.';
-  if (/wrong version number|ssl routines|packet length/i.test(msg)) return 'SSL/TLS mismatch. Use port 587 with Secure = No, or port 465 with Secure = Yes.';
-  if (/self.signed|certificate|altnames/i.test(msg)) return 'The mail server certificate was rejected: ' + msg;
-  if (code === 'EENVELOPE' || /Invalid (recipient|sender)|From/i.test(msg) && /address/i.test(msg)) return 'Sender or recipient address is invalid: ' + msg;
+  const code = e && e.code;
+  const resp = (e && e.response) || '';
+  const msg = String((e && e.message) || 'unknown error');
+
+  if (code === 'EAUTH' || /535|534|auth/i.test(resp + msg)) {
+    return 'Login rejected. For Gmail use an App Password, not your normal password.';
+  }
+  if (code === 'ENOTFOUND' || code === 'EDNS') {
+    return 'SMTP host not found. Check the server name, e.g. smtp.gmail.com.';
+  }
+  if (code === 'ECONNREFUSED') {
+    return 'Connection refused. Check port 587 or 465 and hosting restrictions.';
+  }
+  if (/timed? ?out/i.test(msg)) {
+    return 'Connection timed out. Check the SMTP host, port, and hosting restrictions.';
+  }
+  if (/wrong version number|ssl routines|packet length/i.test(msg)) {
+    return 'SSL/TLS mismatch. Use port 587 with Secure = No, or port 465 with Secure = Yes.';
+  }
+  if (/self.signed|certificate|altnames/i.test(msg)) {
+    return 'Mail server certificate error: ' + msg;
+  }
+  if (code === 'EENVELOPE' || (/Invalid (recipient|sender)|From/i.test(msg) && /address/i.test(msg))) {
+    return 'Sender or recipient address is invalid: ' + msg;
+  }
   return msg.slice(0, 300);
 }
 
 function smtpTransport(db) {
   const s = db.settings.smtp;
-  if (!(s.host && s.user && s.pass)) return null; // not configured -> simulation mode
+  if (!(s.host && s.user && s.pass)) return null;
   return buildTransport(s);
 }
 
-// Checks host, port, TLS and login without sending anything.
 app.post('/api/mail/test', asyncRoute(async (req, res) => {
   const s = load().settings.smtp;
-  if (!(s.host && s.user && s.pass)) return res.status(400).json({ error: 'Fill in host, username and password, save, then test.' });
+
+  if (!(s.host && s.user && s.pass)) {
+    return res.status(400).json({
+      error: 'Fill in host, username and password, save, then test.'
+    });
+  }
+
   try {
     await buildTransport(s).verify();
     res.json({ ok: true });
   } catch (e) {
     console.error('SMTP test failed:', e.code || '', e.message);
-    res.status(502).json({ error: smtpErrorMessage(e), code: e.code || null });
+    res.status(502).json({
+      error: smtpErrorMessage(e),
+      code: e.code || null
+    });
   }
 }));
 
-// Send one email to one client (used by the AI "Draft message" box after the user reviews the text)
 app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
   const db = load();
   const { clientId, subject = '', body = '' } = req.body || {};
   const c = db.clients.find(x => x.id === clientId);
+
   if (!c) return res.status(404).json({ error: 'client not found' });
   if (!c.email) return res.status(400).json({ error: 'this client has no email address' });
-  if (typeof subject !== 'string' || typeof body !== 'string' || !subject.trim() || !body.trim()) return res.status(400).json({ error: 'subject and message are required' });
-  if (subject.length > 300 || body.length > 20000) return res.status(400).json({ error: 'subject or message is too long' });
+
+  if (typeof subject !== 'string' || typeof body !== 'string' ||
+      !subject.trim() || !body.trim()) {
+    return res.status(400).json({ error: 'subject and message are required' });
+  }
+
+  if (subject.length > 300 || body.length > 20000) {
+    return res.status(400).json({ error: 'subject or message is too long' });
+  }
+
   const cleanSubject = subject.replace(/[\r\n]+/g, ' ').trim();
   const transporter = smtpTransport(db);
+
   if (transporter) {
     try {
-      await transporter.sendMail({ from: db.settings.smtp.from || db.settings.smtp.user, to: c.email, subject: cleanSubject, text: body, html: esc(body).replace(/\n/g, '<br>') });
+      await transporter.sendMail({
+        from: db.settings.smtp.from || db.settings.smtp.user,
+        to: c.email,
+        subject: cleanSubject,
+        text: body,
+        html: esc(body).replace(/\n/g, '<br>')
+      });
     } catch (error) {
       console.error('Single email send failed:', error.code || '', error.message);
-      return res.status(502).json({ error: 'Email send failed: ' + smtpErrorMessage(error) });
+      return res.status(502).json({
+        error: 'Email send failed: ' + smtpErrorMessage(error)
+      });
     }
   }
-  // Sending is asynchronous; reload before recording so unrelated edits made
-  // while SMTP was working are kept.
+
   const latest = load();
   const current = latest.clients.find(x => x.id === c.id);
-  log(latest, c.id, 'mail', `Email: ${cleanSubject}${transporter ? '' : ' (simulated)'}`);
+
+  log(latest, c.id, 'mail',
+    `Email: ${cleanSubject}${transporter ? '' : ' (simulated)'}`);
+
   if (current) {
     if (current.stage === 'new') current.stage = 'contacted';
     current.updatedAt = now();
   }
+
   save(latest);
-  res.json({ ok: true, simulated: !transporter, clientDeleted: !current });
+  res.json({
+    ok: true,
+    simulated: !transporter,
+    clientDeleted: !current
+  });
 }));
 
 app.post('/api/mail/send', asyncRoute(async (req, res) => {
   const db = load();
-  const { audience: key = 'all', subject = '', body = '', dryRun } = req.body || {};
-  if (typeof subject !== 'string' || typeof body !== 'string' || !subject.trim() || !body.trim()) return res.status(400).json({ error: 'subject and message are required' });
-  if (subject.length > 300 || body.length > 20000) return res.status(400).json({ error: 'subject or message is too long' });
-  if (!['all', ...STAGES.filter(stage => stage !== 'rejected')].includes(key)) return res.status(400).json({ error: 'unknown audience' });
-  if (massMailInProgress) return res.status(409).json({ error: 'A mass-mail campaign is already running. Wait for it to finish before starting another.' });
+  const {
+    audience: key = 'all',
+    subject = '',
+    body = '',
+    dryRun
+  } = req.body || {};
+
+  if (typeof subject !== 'string' || typeof body !== 'string' ||
+      !subject.trim() || !body.trim()) {
+    return res.status(400).json({ error: 'subject and message are required' });
+  }
+
+  if (subject.length > 300 || body.length > 20000) {
+    return res.status(400).json({ error: 'subject or message is too long' });
+  }
+
+  if (!['all', ...STAGES.filter(stage => stage !== 'rejected')].includes(key)) {
+    return res.status(400).json({ error: 'unknown audience' });
+  }
+
+  if (massMailInProgress) {
+    return res.status(409).json({
+      error: 'A mass-mail campaign is already running. Wait for it to finish before starting another.'
+    });
+  }
+
   const cleanSubject = subject.replace(/[\r\n]+/g, ' ').trim();
   const list = audience(db, key);
   const s = db.settings.smtp;
   const configured = s.host && s.user && s.pass;
   const simulate = dryRun === true || !configured;
-  let transporter;
-  if (!simulate) {
-    transporter = buildTransport(s);
-  }
+  const transporter = simulate ? null : buildTransport(s);
+
   massMailInProgress = true;
+
   try {
-  const camp = {
-    id: uid(), at: now(), subject: cleanSubject, audience: key, total: list.length,
-    sent: 0, failed: 0, skipped: 0, errors: [], simulated: !!simulate,
-    status: list.length ? 'sending' : 'complete', finishedAt: list.length ? '' : now()
-  };
-  const initial = load();
-  initial.campaigns.push(camp);
-  save(initial);
-  let sent = 0, failed = 0, skipped = 0; const errors = [];
-  for (const c of list) {
-    // A client may have opted out or been removed while the campaign was
-    // running; use the latest record immediately before each send.
-    const recipient = readRecord(database, 'clients', c.id);
-    const eligible = recipient && recipient.email && recipient.stage !== 'rejected' && (key === 'all' || recipient.stage === key);
-    if (!eligible) {
-      skipped++;
+    const camp = {
+      id: uid(),
+      at: now(),
+      subject: cleanSubject,
+      audience: key,
+      total: list.length,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      errors: [],
+      simulated: !!simulate,
+      status: list.length ? 'sending' : 'complete',
+      finishedAt: list.length ? '' : now()
+    };
+
+    const initial = load();
+    initial.campaigns.push(camp);
+    save(initial);
+
+    let sent = 0;
+    let failed = 0;
+    let skipped = 0;
+    const errors = [];
+
+    for (const c of list) {
+      const recipient = readRecord(database, 'clients', c.id);
+      const eligible = recipient && recipient.email &&
+        recipient.stage !== 'rejected' &&
+        (key === 'all' || recipient.stage === key);
+
+      if (!eligible) {
+        skipped++;
+
+        updateRecords(database, ({ get, set }) => {
+          const running = get('campaigns', camp.id);
+          if (!running) return;
+
+          running.sent = sent;
+          running.failed = failed;
+          running.skipped = skipped;
+
+          if (sent + failed + skipped >= list.length) {
+            running.status = 'complete';
+            running.finishedAt = now();
+          }
+
+          set('campaigns', running);
+        });
+
+        continue;
+      }
+
+      let delivered = false;
+
+      try {
+        if (!simulate) {
+          await transporter.sendMail({
+            from: s.from || s.user,
+            to: recipient.email,
+            subject: fill(cleanSubject, recipient),
+            text: fill(body, recipient),
+            html: esc(fill(body, recipient)).replace(/\n/g, '<br>')
+          });
+
+          await new Promise(resolve => setTimeout(resolve, 400));
+        }
+
+        sent++;
+        delivered = true;
+      } catch (e) {
+        failed++;
+        errors.push(`${recipient.email}: ${smtpErrorMessage(e)}`);
+      }
+
       updateRecords(database, ({ get, set }) => {
         const running = get('campaigns', camp.id);
-        if (!running) return;
-        running.sent = sent; running.failed = failed; running.skipped = skipped;
-        if (sent + failed + skipped >= list.length) { running.status = 'complete'; running.finishedAt = now(); }
-        set('campaigns', running);
-      });
-      continue;
-    }
-    let delivered = false;
-    try {
-      if (!simulate) {
-        await transporter.sendMail({
-          from: s.from || s.user, to: recipient.email, subject: fill(cleanSubject, recipient),
-          text: fill(body, recipient), html: esc(fill(body, recipient)).replace(/\n/g, '<br>')
-        });
-        await new Promise(r => setTimeout(r, 400)); // gentle rate limit
-      }
-      sent++;
-      delivered = true;
-    } catch (e) { failed++; errors.push(`${recipient.email}: ${smtpErrorMessage(e)}`); }
 
-    updateRecords(database, ({ get, set }) => {
-      const running = get('campaigns', camp.id);
-      if (running) {
-        running.sent = sent; running.failed = failed; running.skipped = skipped;
-        running.errors = errors.slice(0, 20);
-        if (sent + failed + skipped >= list.length) { running.status = 'complete'; running.finishedAt = now(); }
-        set('campaigns', running);
-      }
-      const latestRecipient = get('clients', recipient.id);
-      if (delivered && latestRecipient) {
-        const at = now();
-        set('activities', { id: uid(), clientId: latestRecipient.id, type: 'mail', note: `Mass mail: ${cleanSubject}${simulate ? ' (simulated)' : ''}`, at });
-        if (latestRecipient.stage === 'new') latestRecipient.stage = 'contacted';
-        latestRecipient.updatedAt = at;
-        set('clients', latestRecipient);
-      }
-    });
-  }
-  const completed = load().campaigns.find(x => x.id === camp.id) || camp;
-  res.json({ ...completed, errors: errors.slice(0, 5) });
+        if (running) {
+          running.sent = sent;
+          running.failed = failed;
+          running.skipped = skipped;
+          running.errors = errors.slice(0, 20);
+
+          if (sent + failed + skipped >= list.length) {
+            running.status = 'complete';
+            running.finishedAt = now();
+          }
+
+          set('campaigns', running);
+        }
+
+        const latestRecipient = get('clients', recipient.id);
+
+        if (delivered && latestRecipient) {
+          const at = now();
+
+          set('activities', {
+            id: uid(),
+            clientId: latestRecipient.id,
+            type: 'mail',
+            note: `Mass mail: ${cleanSubject}${simulate ? ' (simulated)' : ''}`,
+            at
+          });
+
+          if (latestRecipient.stage === 'new') {
+            latestRecipient.stage = 'contacted';
+          }
+
+          latestRecipient.updatedAt = at;
+          set('clients', latestRecipient);
+        }
+      });
+    }
+
+    const completed = load().campaigns.find(x => x.id === camp.id) || camp;
+    res.json({ ...completed, errors: errors.slice(0, 5) });
   } finally {
     massMailInProgress = false;
   }
 }));
 
-// ---------- CRM tools (tasks, deals, templates, reports, CSV export) and Claude AI features ----------
+// ---------- CRM tools and Claude AI features ----------
 const ctx = { load, save, uid, now, log, STAGES, CALLS };
+
 require('./lib/tools').mount(app, ctx);
 require('./lib/ai').mount(app, ctx);
 
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
+
   console.error('CRM request failed:', error.message);
+
   const status = error.code === 'CRM_CONCURRENT_UPDATE' ? 409 : 500;
-  if (req.path.startsWith('/api/')) return res.status(status).json({ error: status === 500 ? 'The request could not be completed.' : error.message });
-  res.status(status).send(status === 500 ? 'The request could not be completed.' : error.message);
+
+  if (req.path.startsWith('/api/')) {
+    return res.status(status).json({
+      error: status === 500
+        ? 'The request could not be completed.'
+        : error.message
+    });
+  }
+
+  res.status(status).send(
+    status === 500
+      ? 'The request could not be completed.'
+      : error.message
+  );
 });
 
-const server = app.listen(PORT, () => console.log(`CRM running at http://localhost:${PORT}`));
+const server = app.listen(PORT, () => {
+  console.log(`CRM running at http://localhost:${PORT}`);
+});
+
 function shutdown() {
   server.close(() => {
     database.close();
     process.exit(0);
   });
 }
+
 process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
