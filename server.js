@@ -1,4 +1,4 @@
-﻿
+
  // Company CRM - Express server with local SQLite storage.
 const express = require('express');
 const fs = require('node:fs');
@@ -718,26 +718,69 @@ function smtpTransport(db) {
   return buildTransport(s);
 }
 
-app.post('/api/mail/test', asyncRoute(async (req, res) => {
-  const s = load().settings.smtp;
+async function sendWithResend({ to, subject, text, html }) {
+  const apiKey = (process.env.RESEND_API_KEY || '').trim();
+  const from = (process.env.RESEND_FROM || '').trim() || 'onboarding@resend.dev';
 
-  if (!(s.host && s.user && s.pass)) {
+  if (!apiKey) {
+    throw new Error(
+      'Missing RESEND_API_KEY environment variable.'
+    );
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ from, to, subject, text, html }),
+    signal: AbortSignal.timeout(20000)
+  });
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const errorMsg =
+      result.message ||
+      (typeof result.error === 'string' ? result.error : result.error?.message) ||
+      `Resend API error: ${response.status}`;
+    throw new Error(errorMsg);
+  }
+
+  return result;
+}
+
+
+app.post('/api/mail/test', asyncRoute(async (req, res) => {
+  const testTo = (req.body?.to || process.env.RESEND_TEST_TO || '').trim();
+
+  if (!testTo) {
     return res.status(400).json({
-      error: 'Fill in host, username and password, save, then test.'
+      error: 'Set RESEND_TEST_TO in Render environment variables or provide a recipient in the request body.'
     });
   }
 
   try {
-    await buildTransport(s).verify();
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('SMTP test failed:', e.code || '', e.message);
+    await sendWithResend({
+      to: testTo,
+      subject: 'Right Head CRM - Test Email',
+      text: 'Your Right Head CRM email integration is working.',
+      html: '<p>Your Right Head CRM email integration is working.</p>'
+    });
+
+    res.json({
+      ok: true,
+      message: 'Test email accepted by Resend.'
+    });
+  } catch (error) {
+    console.error('Resend test failed:', error.message);
     res.status(502).json({
-      error: smtpErrorMessage(e),
-      code: e.code || null
+      error: 'Email test failed: ' + error.message
     });
   }
 }));
+
 
 app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
   const db = load();
@@ -757,21 +800,22 @@ app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
   }
 
   const cleanSubject = subject.replace(/[\r\n]+/g, ' ').trim();
-  const transporter = smtpTransport(db);
+  const configured = Boolean((process.env.RESEND_API_KEY || '').trim());
 
-  if (transporter) {
+  if (configured) {
     try {
-      await transporter.sendMail({
-        from: db.settings.smtp.from || db.settings.smtp.user,
+      const personalizedSubject = fill(cleanSubject, c);
+      const personalizedBody = fill(body, c);
+      await sendWithResend({
         to: c.email,
-        subject: cleanSubject,
-        text: body,
-        html: esc(body).replace(/\n/g, '<br>')
+        subject: personalizedSubject,
+        text: personalizedBody,
+        html: esc(personalizedBody).replace(/\n/g, '<br>')
       });
     } catch (error) {
-      console.error('Single email send failed:', error.code || '', error.message);
+      console.error('Single email send failed:', error.message);
       return res.status(502).json({
-        error: 'Email send failed: ' + smtpErrorMessage(error)
+        error: 'Email send failed: ' + error.message
       });
     }
   }
@@ -780,7 +824,7 @@ app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
   const current = latest.clients.find(x => x.id === c.id);
 
   log(latest, c.id, 'mail',
-    `Email: ${cleanSubject}${transporter ? '' : ' (simulated)'}`);
+    `Email: ${cleanSubject}${configured ? '' : ' (simulated)'}`);
 
   if (current) {
     if (current.stage === 'new') current.stage = 'contacted';
@@ -790,7 +834,7 @@ app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
   save(latest);
   res.json({
     ok: true,
-    simulated: !transporter,
+    simulated: !configured,
     clientDeleted: !current
   });
 }));
@@ -825,10 +869,8 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
 
   const cleanSubject = subject.replace(/[\r\n]+/g, ' ').trim();
   const list = audience(db, key);
-  const s = db.settings.smtp;
-  const configured = s.host && s.user && s.pass;
+  const configured = Boolean((process.env.RESEND_API_KEY || '').trim());
   const simulate = dryRun === true || !configured;
-  const transporter = simulate ? null : buildTransport(s);
 
   massMailInProgress = true;
 
@@ -889,22 +931,24 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
 
       try {
         if (!simulate) {
-          await transporter.sendMail({
-            from: s.from || s.user,
+          const personalizedSubject = fill(cleanSubject, recipient);
+          const personalizedBody = fill(body, recipient);
+          await sendWithResend({
             to: recipient.email,
-            subject: fill(cleanSubject, recipient),
-            text: fill(body, recipient),
-            html: esc(fill(body, recipient)).replace(/\n/g, '<br>')
+            subject: personalizedSubject,
+            text: personalizedBody,
+            html: esc(personalizedBody).replace(/\n/g, '<br>')
           });
 
-          await new Promise(resolve => setTimeout(resolve, 400));
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
 
         sent++;
         delivered = true;
       } catch (e) {
         failed++;
-        errors.push(`${recipient.email}: ${smtpErrorMessage(e)}`);
+        console.error(`Mass mail send failed for ${recipient.email}:`, e.message);
+        errors.push(`${recipient.email}: ${e.message}`);
       }
 
       updateRecords(database, ({ get, set }) => {
