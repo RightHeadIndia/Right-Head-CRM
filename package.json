@@ -1,0 +1,24 @@
+{
+  "name": "company-crm",
+  "version": "1.2.0",
+  "description": "Right Head CRM with Neon PostgreSQL persistence, client management, calls, follow-ups, campaigns, tasks, deals, reports, CSV/Excel import/export and AI features.",
+  "main": "server.js",
+  "private": true,
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.js",
+    "start": "node --env-file-if-exists=.env server.js",
+    "test": "node --test",
+    "check": "node --check server.js && node --check lib/database-postgres.js && node --check scripts/import-csv.js",
+    "check-neon": "node --env-file-if-exists=.env scripts/check-neon.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.14",
+    "pg": "^8.23.1",
+    "xlsx": "^0.18.5"
+  }
+}
