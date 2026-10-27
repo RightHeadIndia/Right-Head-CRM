@@ -27,13 +27,14 @@ const writeDatabase = usingPostgres ? writePostgresDatabase : writeSQLiteDatabas
 const readRecord = usingPostgres ? readPostgresRecord : readSQLiteRecord;
 const updateRecords = usingPostgres ? updatePostgresRecords : updateSQLiteRecords;
 const sessions = new Map();
+const revokedSessions = new Set();
 const loginFailures = new Map();
 const SESSION_MS = 12 * 60 * 60 * 1000;
 const COOKIE_NAME = 'crm_session';
 let massMailInProgress = false;
 
 const app = express();
-if (process.env.CRM_TRUST_PROXY === '1') app.set('trust proxy', 1);
+if (process.env.CRM_TRUST_PROXY === '1' || process.env.NODE_ENV === 'production' || process.env.RENDER) app.set('trust proxy', 1);
 app.use(express.json({ limit: '5mb' }));
 app.use('/api', (req, res, next) => {
   res.set({ 'Cache-Control': 'no-store', Pragma: 'no-cache' });
@@ -71,21 +72,51 @@ app.use((req, res, next) => {
   next();
 });
 
+function createSessionToken() {
+  const rand = crypto.randomBytes(16).toString('hex');
+  const exp = Date.now() + SESSION_MS;
+  const payload = `${rand}.${exp}`;
+  const sig = crypto.createHmac('sha256', APP_PASSWORD).update(payload).digest('hex');
+  return `${payload}.${sig}`;
+}
+
 function sessionId(req) {
   const cookie = req.headers.cookie || '';
   const part = cookie.split(';').map(x => x.trim()).find(x => x.startsWith(COOKIE_NAME + '='));
-  return part ? part.slice(COOKIE_NAME.length + 1) : '';
+  return part ? decodeURIComponent(part.slice(COOKIE_NAME.length + 1)) : '';
 }
+
 function hasSession(req) {
-  const id = sessionId(req);
-  const expires = sessions.get(id);
+  const token = sessionId(req);
+  if (!token) return false;
+  if (revokedSessions.has(token)) return false;
+
+  const parts = token.split('.');
+  if (parts.length === 3) {
+    const [rand, expStr, sig] = parts;
+    const exp = Number(expStr);
+    if (!Number.isFinite(exp) || exp <= Date.now()) return false;
+    const payload = `${rand}.${expStr}`;
+    const expectedSig = crypto.createHmac('sha256', APP_PASSWORD).update(payload).digest('hex');
+    try {
+      if (crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expectedSig, 'hex'))) {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  const expires = sessions.get(token);
   if (!expires) return false;
-  if (expires <= Date.now()) { sessions.delete(id); return false; }
+  if (expires <= Date.now()) { sessions.delete(token); return false; }
   return true;
 }
+
 function setSessionCookie(req, res, id) {
-  const secure = req.secure ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=${encodeURIComponent(id)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MS / 1000}${secure}`);
+  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  const secure = isHttps ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${COOKIE_NAME}=${encodeURIComponent(id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MS / 1000}${secure}`);
 }
 const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 
@@ -104,20 +135,34 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(401).json({ error: 'Incorrect company password.' });
   }
   loginFailures.delete(key);
-  const id = crypto.randomBytes(32).toString('hex');
+  const id = createSessionToken();
   sessions.set(id, Date.now() + SESSION_MS);
   setSessionCookie(req, res, id);
   res.json({ ok: true });
 });
 app.post('/api/auth/logout', (req, res) => {
-  sessions.delete(sessionId(req));
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${req.secure ? '; Secure' : ''}`);
+  const id = sessionId(req);
+  if (id) {
+    revokedSessions.add(id);
+    sessions.delete(id);
+  }
+  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${isHttps ? '; Secure' : ''}`);
   res.json({ ok: true });
 });
 
 app.get('/favicon.ico', (req, res) => res.status(204).end()); // no icon file; stops the browser's 404/redirect
 app.use((req, res, next) => {
-  if (['/login.html', '/login.js', '/login.css'].includes(req.path)) return next();
+  let decodedPath = req.path;
+  try { decodedPath = decodeURIComponent(req.path); } catch (_) {}
+
+  const isPublic =
+    ['/login.html', '/login.js', '/login.css', '/Right head Logo.png', '/logo.png'].includes(decodedPath) ||
+    ['/Right head Logo.png', '/logo.png'].includes(req.path) ||
+    /\.(png|jpg|jpeg|svg|ico|webp|gif)$/i.test(decodedPath) ||
+    decodedPath.startsWith('/vendor/');
+
+  if (isPublic) return next();
   if (hasSession(req)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Please log in to continue.' });
   res.redirect('/login.html');
