@@ -147,6 +147,7 @@ function renderList() {
       <button class="btn small danger" onclick="delClient('${c.id}')">Delete</button>
       ${c.source && /^https?:\/\//i.test(c.source) ? `<a class="btn small" href="${esc(c.source)}" target="_blank" rel="noopener">Link</a>` : ''}
       ${c.phone ? `<a class="btn small" href="https://wa.me/${esc(c.phone.replace(/\D/g, ''))}" target="_blank">WhatsApp</a>` : ''}
+      ${c.email ? `<button class="btn small" onclick="openSendMailModal('${c.id}')" title="Send email to ${esc(c.email)}">&#9993; Email</button>` : ''}
     </div></td>
   </tr>`).join('') || '<tr><td colspan="6" class="empty">No clients in this view.</td></tr>'}
   </tbody></table></div>${total > rows.length ? `<div class="actions" style="justify-content:center"><button class="btn" onclick="listLimit+=200;renderList()">Show more (${total - rows.length} not shown)</button></div>` : ''}`;
@@ -175,7 +176,7 @@ async function openClient(id) {
     <div><label>Name *</label><input id="f_name" value="${esc(c.name)}"></div>
     <div><label>Company</label><input id="f_company" value="${esc(c.company)}"></div>
     <div><label>Phone</label><input id="f_phone" value="${esc(c.phone)}"></div>
-    <div><label>Email</label><input id="f_email" value="${esc(c.email)}"></div>
+    <div><label>Email</label><div style="display:flex;gap:6px"><input id="f_email" value="${esc(c.email)}" style="flex:1">${id && c.email ? `<button type="button" class="btn small primary" onclick="openSendMailModal('${id}')" title="Send email to this client" style="white-space:nowrap">&#9993; Send Mail</button>` : ''}</div></div>
     <div><label>Location</label><input id="f_location" value="${esc(c.location || '')}"></div>
     <div><label>Source / Link ${c.source && /^https?:\/\//i.test(c.source) ? `<a href="${esc(c.source)}" target="_blank" rel="noopener" style="font-size:11px;margin-left:6px">&#x2197; Open</a>` : ''}</label><input id="f_source" value="${esc(c.source || '')}"></div>
     <div><label>Stage</label><select id="f_stage">${Object.keys(STAGES).map(k => `<option value="${k}" ${(c.stage || 'new') === k ? 'selected' : ''}>${STAGES[k]}</option>`).join('')}</select></div>
@@ -184,6 +185,7 @@ async function openClient(id) {
     <div class="full"><label>Notes</label><textarea id="f_notes">${esc(c.notes)}</textarea></div>
   </div>
   <div class="actions">
+    ${id && c.email ? `<button type="button" class="btn" onclick="openSendMailModal('${id}')">&#9993; Send email</button>` : ''}
     ${id ? `<button class="btn danger" onclick="delClient('${id}')">Delete client</button>` : ''}
     <button class="btn" onclick="closeModal()">Close</button>
     <button class="btn primary" onclick="saveClient('${id || ''}')">Save</button>
@@ -622,3 +624,89 @@ window.addEventListener('unhandledrejection', event => {
   await refresh(); render(); checkReminders();
   setInterval(async () => { if (document.hidden) return; await refresh(); checkReminders(); renderNav(); }, 60000);
 })();
+
+// ---------- individual client email composer ----------
+async function openSendMailModal(clientId) {
+  const c = clients.find(x => x.id === clientId);
+  if (!c) return toast('Client not found');
+  if (!c.email) return toast('This client has no email address');
+
+  // Load templates if not loaded yet
+  if (!mailTpls || !mailTpls.length) {
+    try { mailTpls = await api('/templates'); } catch { mailTpls = []; }
+  }
+
+  $('#modalBox').innerHTML = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+    <h2 style="margin:0">&#9993; Send Email to ${esc(c.name)}</h2>
+    <button class="btn small" onclick="openClient('${clientId}')" title="Back to client" style="border:0;background:transparent;font-size:22px;cursor:pointer;color:var(--muted);padding:0 6px;line-height:1">&times;</button>
+  </div>
+  <div style="background:var(--grey-bg, #f8fafc);border:1px solid var(--border, #e2e8f0);padding:10px 14px;border-radius:var(--radius, 8px);margin-bottom:14px;font-size:13px;display:flex;gap:16px;flex-wrap:wrap">
+    <div><b>Recipient:</b> ${esc(c.name)} &lt;${esc(c.email)}&gt;</div>
+    ${c.company ? `<div><b>Company:</b> ${esc(c.company)}</div>` : ''}
+    ${c.stage ? `<div><b>Stage:</b> ${STAGES[c.stage] || c.stage}</div>` : ''}
+  </div>
+  <div class="form" style="display:block">
+    <div style="margin-bottom:12px">
+      <label>Choose a Template (optional)</label>
+      <select id="sm_tpl" onchange="applyTemplateToSingleMail('${clientId}', this.value)" style="width:100%">
+        <option value="">- none (start from scratch) -</option>
+        ${(mailTpls || []).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label>Subject *</label>
+      <input id="sm_subject" style="width:100%" placeholder="e.g. Follow-up from Right Head regarding...">
+    </div>
+    <div style="margin-bottom:12px">
+      <label>Message * (supports {{name}}, {{company}})</label>
+      <textarea id="sm_body" style="width:100%;min-height:170px" placeholder="Hi ${esc(c.name || 'there')},&#10;&#10;..."></textarea>
+      ${typeof aiWriterBox === 'function' ? aiWriterBox('sm_subject', 'sm_body') : ''}
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn" onclick="openClient('${clientId}')">Back to Client</button>
+    <button id="sm_sendBtn" class="btn primary" onclick="sendSingleMail('${clientId}')">Send Email</button>
+  </div>`;
+  $('#modal').classList.remove('hidden');
+}
+
+function applyTemplateToSingleMail(clientId, tplId) {
+  const c = clients.find(x => x.id === clientId);
+  if (!c) return;
+  const t = (mailTpls || []).find(x => x.id === tplId);
+  if (!t) return;
+  const sub = $('#sm_subject'), body = $('#sm_body');
+  if ((sub.value || body.value) && !confirm('Replace current subject and message with this template?')) return;
+  const fill = (str) => String(str || '').replace(/{{\s*(name|company|email|phone)\s*}}/gi, (_, k) => c[k.toLowerCase()] || '');
+  sub.value = fill(t.subject);
+  body.value = fill(t.body);
+}
+
+async function sendSingleMail(clientId) {
+  const c = clients.find(x => x.id === clientId);
+  if (!c) return toast('Client not found');
+  const subject = $('#sm_subject').value.trim();
+  const body = $('#sm_body').value.trim();
+  if (!subject || !body) return toast('Subject and message are required');
+
+  if (c.stage === 'rejected' && !confirm(`${c.name} is in the Red Zone (said no). Send anyway?`)) return;
+  if (!confirm(`Send this email to ${c.email}?`)) return;
+
+  const btn = $('#sm_sendBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
+
+  try {
+    const res = await api('/mail/send-one', 'POST', { clientId, subject, body });
+    if (res.error) return toast('Failed: ' + res.error);
+
+    toast(res.simulated ? 'Simulated send (logged in activity)' : `Email sent to ${c.email}`);
+    await refresh();
+    openClient(clientId);
+    renderNav();
+  } catch (err) {
+    toast('Error: ' + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Send Email'; }
+  }
+}
