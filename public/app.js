@@ -705,7 +705,12 @@ async function sendSingleMail(clientId) {
     openClient(clientId);
     renderNav();
   } catch (err) {
-    toast('Error: ' + err.message);
+    const msg = err.message || 'Unknown error';
+    if (msg.includes('Sandbox') || msg.includes('resend.com/domains') || msg.includes('only send testing emails')) {
+      alert(msg);
+    } else {
+      toast('Error: ' + msg);
+    }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Send Email'; }
   }

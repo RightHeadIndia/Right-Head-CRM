@@ -721,6 +721,7 @@ function smtpTransport(db) {
 async function sendWithResend({ to, subject, text, html }) {
   const apiKey = (process.env.RESEND_API_KEY || '').trim();
   const from = (process.env.RESEND_FROM || '').trim() || 'onboarding@resend.dev';
+  const sandboxTo = (process.env.RESEND_SANDBOX_REDIRECT_TO || '').trim();
 
   if (!apiKey) {
     throw new Error(
@@ -728,23 +729,37 @@ async function sendWithResend({ to, subject, text, html }) {
     );
   }
 
+  const finalTo = sandboxTo || to;
+  const finalSubject = sandboxTo ? `[Test for ${to}] ${subject}` : subject;
+  const finalHtml = sandboxTo
+    ? `<div style="background:#fef3c7;border:1px solid #f59e0b;padding:8px 12px;margin-bottom:14px;border-radius:6px;font-size:13px;color:#92400e;"><strong>Resend Sandbox Mode:</strong> Originally intended for <code>${to}</code></div>${html}`
+    : html;
+  const finalText = sandboxTo
+    ? `[Resend Sandbox Mode - Originally intended for: ${to}]\n\n${text}`
+    : text;
+
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ from, to, subject, text, html }),
+    body: JSON.stringify({ from, to: finalTo, subject: finalSubject, text: finalText, html: finalHtml }),
     signal: AbortSignal.timeout(20000)
   });
 
   const result = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    const errorMsg =
+    let errorMsg =
       result.message ||
       (typeof result.error === 'string' ? result.error : result.error?.message) ||
       `Resend API error: ${response.status}`;
+
+    if (errorMsg.includes('only send testing emails to your own email address')) {
+      const registeredEmail = errorMsg.match(/\(([^)]+)\)/)?.[1] || 'your registered account email';
+      errorMsg = `Resend Sandbox Restriction: Resend is using onboarding@resend.dev, which can only send to ${registeredEmail}. To send to real clients, verify your domain at resend.com/domains and set RESEND_FROM in Render (e.g. Right Head <contact@righthead.in>). For testing other clients right now, you can set RESEND_SANDBOX_REDIRECT_TO=${registeredEmail} in Render.`;
+    }
     throw new Error(errorMsg);
   }
 
