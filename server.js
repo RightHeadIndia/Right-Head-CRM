@@ -813,8 +813,32 @@ async function sendWithResend({ to, subject, text, html }) {
 
 
 app.post('/api/mail/test', asyncRoute(async (req, res) => {
-  const testTo = (req.body?.to || process.env.RESEND_TEST_TO || '').trim();
+  const db = load();
+  const s = db.settings.smtp;
+  const smtpConfigured = s.host && s.user && s.pass;
+  const resendConfigured = Boolean((process.env.RESEND_API_KEY || '').trim());
 
+  // --- SMTP test (preferred when SMTP is configured in Settings) ---
+  if (smtpConfigured) {
+    try {
+      const transporter = buildTransport(s);
+      await transporter.verify();
+      res.json({ ok: true, message: 'SMTP connection verified. Login accepted — emails will send from ' + (s.from || s.user) + '.' });
+    } catch (e) {
+      console.error('SMTP test failed:', e.code || '', e.message);
+      res.status(502).json({ error: smtpErrorMessage(e) });
+    }
+    return;
+  }
+
+  // --- Resend test (fallback when no SMTP configured) ---
+  if (!resendConfigured) {
+    return res.status(400).json({
+      error: 'No email method configured. Either fill in SMTP settings in the Settings page, or set RESEND_API_KEY in Render environment variables.'
+    });
+  }
+
+  const testTo = (req.body?.to || process.env.RESEND_TEST_TO || '').trim();
   if (!testTo) {
     return res.status(400).json({
       error: 'Set RESEND_TEST_TO in Render environment variables or provide a recipient in the request body.'
@@ -828,16 +852,10 @@ app.post('/api/mail/test', asyncRoute(async (req, res) => {
       text: 'Your Right Head CRM email integration is working.',
       html: '<p>Your Right Head CRM email integration is working.</p>'
     });
-
-    res.json({
-      ok: true,
-      message: 'Test email accepted by Resend.'
-    });
+    res.json({ ok: true, message: 'Test email accepted by Resend.' });
   } catch (error) {
     console.error('Resend test failed:', error.message);
-    res.status(502).json({
-      error: 'Email test failed: ' + error.message
-    });
+    res.status(502).json({ error: 'Email test failed: ' + error.message });
   }
 }));
 
@@ -860,22 +878,39 @@ app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
   }
 
   const cleanSubject = subject.replace(/[\r\n]+/g, ' ').trim();
-  const configured = Boolean((process.env.RESEND_API_KEY || '').trim());
+  const s = db.settings.smtp;
+  const smtpConfigured = Boolean(s.host && s.user && s.pass);
+  const resendConfigured = Boolean((process.env.RESEND_API_KEY || '').trim());
+  const configured = smtpConfigured || resendConfigured;
 
   if (configured) {
     try {
       const personalizedSubject = fill(cleanSubject, c);
       const personalizedBody = fill(body, c);
-      await sendWithResend({
-        to: c.email,
-        subject: personalizedSubject,
-        text: personalizedBody,
-        html: esc(personalizedBody).replace(/\n/g, '<br>')
-      });
+
+      if (smtpConfigured) {
+        // Prefer SMTP (sends directly from contact@righthead.in via your email server)
+        const transporter = buildTransport(s);
+        await transporter.sendMail({
+          from: s.from || s.user,
+          to: c.email,
+          subject: personalizedSubject,
+          text: personalizedBody,
+          html: esc(personalizedBody).replace(/\n/g, '<br>')
+        });
+      } else {
+        // Fallback to Resend API
+        await sendWithResend({
+          to: c.email,
+          subject: personalizedSubject,
+          text: personalizedBody,
+          html: esc(personalizedBody).replace(/\n/g, '<br>')
+        });
+      }
     } catch (error) {
       console.error('Single email send failed:', error.message);
       return res.status(502).json({
-        error: 'Email send failed: ' + error.message
+        error: 'Email send failed: ' + (smtpConfigured ? smtpErrorMessage(error) : error.message)
       });
     }
   }
@@ -929,8 +964,12 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
 
   const cleanSubject = subject.replace(/[\r\n]+/g, ' ').trim();
   const list = audience(db, key);
-  const configured = Boolean((process.env.RESEND_API_KEY || '').trim());
+  const s = db.settings.smtp;
+  const smtpConfigured = Boolean(s.host && s.user && s.pass);
+  const resendConfigured = Boolean((process.env.RESEND_API_KEY || '').trim());
+  const configured = smtpConfigured || resendConfigured;
   const simulate = dryRun === true || !configured;
+  const transporter = smtpConfigured && !simulate ? buildTransport(s) : null;
 
   massMailInProgress = true;
 
@@ -993,12 +1032,25 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
         if (!simulate) {
           const personalizedSubject = fill(cleanSubject, recipient);
           const personalizedBody = fill(body, recipient);
-          await sendWithResend({
-            to: recipient.email,
-            subject: personalizedSubject,
-            text: personalizedBody,
-            html: esc(personalizedBody).replace(/\n/g, '<br>')
-          });
+
+          if (transporter) {
+            // Send via SMTP (directly from contact@righthead.in)
+            await transporter.sendMail({
+              from: s.from || s.user,
+              to: recipient.email,
+              subject: personalizedSubject,
+              text: personalizedBody,
+              html: esc(personalizedBody).replace(/\n/g, '<br>')
+            });
+          } else {
+            // Fallback to Resend API
+            await sendWithResend({
+              to: recipient.email,
+              subject: personalizedSubject,
+              text: personalizedBody,
+              html: esc(personalizedBody).replace(/\n/g, '<br>')
+            });
+          }
 
           await new Promise(resolve => setTimeout(resolve, 500));
         }
@@ -1008,7 +1060,7 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
       } catch (e) {
         failed++;
         console.error(`Mass mail send failed for ${recipient.email}:`, e.message);
-        errors.push(`${recipient.email}: ${e.message}`);
+        errors.push(`${recipient.email}: ${transporter ? smtpErrorMessage(e) : e.message}`);
       }
 
       updateRecords(database, ({ get, set }) => {
