@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Right Head CRM</title>
 <link rel="icon" type="image/png" href="Right head Logo.png">
+<script>try { document.documentElement.dataset.theme = localStorage.getItem('crm-theme') || 'light'; } catch (_) {}</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -21,6 +22,7 @@
     <h1 id="pageTitle">Dashboard</h1>
     <div class="head-actions">
       <input id="search" placeholder="Search name, company, phone, email...">
+      <button id="themeToggle" class="btn" onclick="toggleTheme()" aria-label="Toggle dark mode">Dark mode</button>
       <button class="btn primary" onclick="openClient()">+ Add Client</button>
     </div>
   </header>

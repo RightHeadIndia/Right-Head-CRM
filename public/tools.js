@@ -179,6 +179,8 @@ async function renderReports() {
     <div class="stat green"><b>${money(d.wonValue)}</b><span>Won in period (${d.wonCount})</span></div>
     <div class="stat"><b>${pct(d.winRate)}</b><span>Win rate (${d.wonCount} won / ${d.lostCount} lost)</span></div>
     <div class="stat red"><b>${r.tasks.overdue}</b><span>Overdue tasks (${r.tasks.open} open)</span></div>
+    <div class="stat blue"><b>${r.campaigns?.sent || 0}</b><span>Campaign messages sent</span></div>
+    <div class="stat amber"><b>${r.campaigns?.sequencesActive || 0}</b><span>Active follow-up sequences</span></div>
   </div>
   <div class="grid cols">
     <div class="panel"><h3>Client funnel (now)</h3>${Object.keys(STAGES).map(k => barRow(STAGES[k].split(' ')[0] === 'Said' ? 'Said No' : STAGES[k].split(' ')[0], c.stages[k], stageMax)).join('')}
@@ -186,6 +188,10 @@ async function renderReports() {
     <div class="panel"><h3>Calling outcomes (now)</h3>${Object.keys(CALLS).map(k => barRow(CALLS[k], c.calls[k], callMax)).join('')}</div>
     <div class="panel"><h3>Team activity (period)</h3>
       ${[['call', 'Call updates'], ['reply', 'Client replies'], ['mail', 'Emails sent'], ['note', 'Notes'], ['stage', 'Stage changes'], ['task', 'Task events'], ['deal', 'Deal events']].map(([k, l]) => barRow(l, a[k], Math.max(1, ...Object.values(a)))).join('')}</div>
+    <div class="panel"><h3>Campaign performance (period)</h3>
+      ${barRow('Messages sent', r.campaigns?.sent || 0, Math.max(1, r.campaigns?.sent || 0))}
+      ${barRow('Failed attempts', r.campaigns?.failed || 0, Math.max(1, r.campaigns?.sent || 0, r.campaigns?.failed || 0))}
+      <div class="empty">${r.campaigns?.campaigns || 0} campaigns in period · ${r.campaigns?.sequencesActive || 0} active follow-up sequences</div></div>
     <div class="panel"><h3>Deals by stage (value)</h3>${d.stages.map(s => barRow(DEAL_STAGES[s.stage], s.value, dealMax, `${money(s.value)} <small style="color:var(--muted)">(${s.count})</small>`)).join('')}
       ${d.overdueOpen ? `<div class="empty late">${d.overdueOpen} open deal(s) are past their expected close date.</div>` : ''}</div>
     <div class="panel green"><h3>Won revenue, last 6 months</h3>${d.months.map(m => barRow(m.month, m.value, monthMax, `${money(m.value)} <small style="color:var(--muted)">(${m.won})</small>`)).join('')}

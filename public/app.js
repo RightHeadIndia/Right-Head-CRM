@@ -16,7 +16,17 @@ async function logout() { await api('/auth/logout', 'POST', {}); location.replac
 const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 const STAGES = { new: 'New', contacted: 'Contacted', replied: 'Replied (Blue)', onboarded: 'Onboarded (Green)', rejected: 'Said No (Red)' };
 const CALLS = { not_called: 'Not called', connected: 'Connected', no_answer: 'No answer', busy: 'Busy', callback: 'Call back' };
+const COMMUNICATION = { not_contacted: 'Not contacted', contacted: 'Contacted', replied: 'Replied', opted_out: 'Opted out' };
 const badge = s => `<span class="badge b-${s}">${STAGES[s].split(' ')[0] === 'Said' ? 'Said No' : STAGES[s].split(' ')[0]}</span>`;
+const CLIENT_ACTION_ICONS = {
+  open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>',
+  delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l3-3A5 5 0 0 0 13 2.93l-1.72 1.72"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3A5 5 0 0 0 11 21.07l1.72-1.72"/></svg>',
+  whatsapp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a8.4 8.4 0 0 1-12.4 7.4L3 20l1.2-4.4A8.4 8.4 0 1 1 20 11.5Z"/><path d="M8 8.5c.6 3.2 2.4 5 5.6 5.6l1-1.3 2 .8c-.2 1.4-1.2 2.2-2.6 2.1-3.7-.4-7.2-3.9-7.6-7.6-.1-1.4.7-2.4 2.1-2.6l.8 2L8 8.5Z"/></svg>',
+  linkedin: '<span class="action-brand-icon" aria-hidden="true">in</span>',
+  call: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h4l2 5-2.5 1.5a15 15 0 0 0 6 6L16 13l5 2v4c0 1.1-.9 2-2 2C10 21 3 14 3 5c0-1.1.9-2 2-2Z"/></svg>',
+  email: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg>'
+};
 const fmt = d => d ? new Date(d).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '-';
 const isLate = d => d && new Date(d) < new Date();
 const toLocalInput = d => { if (!d) return ''; const t = new Date(d); t.setMinutes(t.getMinutes() - t.getTimezoneOffset()); return t.toISOString().slice(0, 16); };
@@ -25,6 +35,19 @@ let clients = [];
 let page = location.hash.slice(1) || 'dashboard';
 let settings = {};
 let openTaskCount;
+function applyTheme(theme) {
+  const selected = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = selected;
+  try { localStorage.setItem('crm-theme', selected); } catch (_) {}
+  const button = $('#themeToggle');
+  if (button) button.textContent = selected === 'dark' ? 'Light mode' : 'Dark mode';
+}
+async function toggleTheme() {
+  const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(theme);
+  try { await api('/settings', 'PUT', { theme }); settings.theme = theme; }
+  catch (e) { toast('Theme saved on this device; account preference could not be saved.'); }
+}
 
 const PAGES = {
   dashboard: { title: 'Dashboard', icon: '&#9638;' },
@@ -67,8 +90,17 @@ function renderNav() {
 }
 
 let listLimit = 200; // rows drawn at once; "Show more" adds 200 (keeps big lists fast)
-function go(p) { page = p; listLimit = 200; location.hash = p; render(); }
-window.addEventListener('hashchange', () => { page = location.hash.slice(1) || 'dashboard'; listLimit = 200; render(); });
+const selectedClientIds = new Set();
+let renderedClientIds = [];
+function go(p) {
+  if (page !== p) selectedClientIds.clear();
+  page = p; listLimit = 200; location.hash = p; render();
+}
+window.addEventListener('hashchange', () => {
+  const nextPage = location.hash.slice(1) || 'dashboard';
+  if (page !== nextPage) selectedClientIds.clear();
+  page = nextPage; listLimit = 200; render();
+});
 
 async function render() {
   $('#pageTitle').textContent = PAGES[page]?.title || 'Dashboard';
@@ -91,6 +123,7 @@ const listItems = (arr, extra) => arr.length ? arr.map(c => `<div class="item" o
 async function renderDashboard() {
   const d = await api('/dashboard');
   const maxCall = Math.max(1, ...Object.values(d.calls));
+  const maxCommunication = Math.max(1, ...Object.values(d.communication || {}));
   $('#view').innerHTML = `
   <div class="grid stats">
     <div class="stat" onclick="go('clients')"><b>${d.total}</b><span>Total clients</span></div>
@@ -103,8 +136,12 @@ async function renderDashboard() {
     <div class="panel"><h3>Calling Status <a onclick="go('calls')">view all</a></h3>
       ${Object.keys(CALLS).map(k => `<div class="bar"><label>${CALLS[k]}</label><div class="track"><div class="fill" style="width:${d.calls[k] / maxCall * 100}%"></div></div><b>${d.calls[k]}</b></div>`).join('')}
     </div>
+    <div class="panel"><h3>Communication Status</h3>
+      ${Object.keys(COMMUNICATION).map(k => `<div class="bar"><label>${COMMUNICATION[k]}</label><div class="track"><div class="fill" style="width:${(d.communication?.[k] || 0) / maxCommunication * 100}%"></div></div><b>${d.communication?.[k] || 0}</b></div>`).join('')}
+    </div>
     <div class="panel amber"><h3>Follow-up Reminders <a onclick="go('followups')">view all</a></h3>
       ${listItems(d.reminders, c => `<span class="${isLate(c.followUp) ? 'late' : ''}">${isLate(c.followUp) ? 'Overdue: ' : 'Today: '}${fmt(c.followUp)}</span> · ${esc(c.phone)}`)}
+      ${d.upcoming?.length ? `<div style="margin-top:12px"><b style="font-size:12px">Upcoming</b>${listItems(d.upcoming, c => `${fmt(c.followUp)} · ${esc(c.phone)}`)}</div>` : ''}
     </div>
     <div class="panel blue"><h3>Client Replies (Blue) <a onclick="go('replied')">view all</a></h3>
       ${listItems(d.replied, c => esc(c.lastReply || 'Client replied').slice(0, 90))}
@@ -134,23 +171,99 @@ function renderList() {
   if ($('#stageF') && $('#stageF').value) rows = rows.filter(c => c.stage === $('#stageF').value);
   const total = rows.length;
   rows = rows.slice(0, listLimit);
+  renderedClientIds = rows.map(client => client.id);
   $('#view').innerHTML = `<div class="toolbar">${stageFilter}<span style="color:var(--muted)">${total} record(s)</span>${page === 'clients' ? `<button class="btn" onclick="go('settings')">&#128229; Import clients</button>` + exportBtn('clients') : ''}</div>
-  <div class="table-wrap"><table><thead><tr><th>Client</th><th>Contact</th><th>Stage</th><th>Call status</th><th>Next follow-up</th><th>Actions</th></tr></thead><tbody>
+  <div class="bulk-status-toolbar" id="bulkStatusToolbar" hidden>
+    <span class="bulk-selected-count" id="bulkSelectedCount"></span>
+    <label class="bulk-field">Stage<select id="bulkStage"><option value="">Keep current</option>${Object.entries(STAGES).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
+    <label class="bulk-field">Communication<select id="bulkCommunication"><option value="">Keep current</option>${Object.entries(COMMUNICATION).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
+    <button class="btn primary" id="bulkApplyButton" onclick="applyBulkClientStatus()">Apply to selected</button>
+    <button class="btn" onclick="clearClientSelection()">Clear selection</button>
+  </div>
+  <div class="table-wrap"><table><thead><tr><th class="client-select-cell"><input id="selectVisibleClients" type="checkbox" aria-label="Select all visible clients" title="Select all visible clients" onchange="toggleVisibleClientSelection(this.checked)"></th><th>Client</th><th>Contact</th><th>Sales stage</th><th>Communication</th><th>Call outcome</th><th>Next follow-up</th><th>Actions</th></tr></thead><tbody>
   ${rows.map(c => `<tr class="row-${c.stage}">
+    <td class="client-select-cell"><input class="client-row-select" type="checkbox" value="${esc(c.id)}" aria-label="Select ${esc(c.name)}" ${selectedClientIds.has(c.id) ? 'checked' : ''} onchange="toggleClientSelection('${c.id}',this.checked)"></td>
     <td><b>${esc(c.name)}</b><br><small style="color:var(--muted)">${esc(c.company)}${c.location ? ' · ' + esc(c.location) : ''}</small></td>
-    <td>${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a><br>` : ''}<small>${esc(c.email)}</small></td>
+    <td>${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a><br>` : ''}<small>${esc(c.email)}${c.alternateEmails?.length ? ` (+${c.alternateEmails.length} additional)` : ''}</small></td>
     <td>${badge(c.stage)}</td>
+    <td><select onchange="quick('${c.id}',{communicationStatus:this.value})">${Object.keys(COMMUNICATION).map(k => `<option value="${k}" ${(c.communicationStatus || 'not_contacted') === k ? 'selected' : ''}>${COMMUNICATION[k]}</option>`).join('')}</select></td>
     <td><select onchange="quick('${c.id}',{callStatus:this.value})">${Object.keys(CALLS).map(k => `<option value="${k}" ${c.callStatus === k ? 'selected' : ''}>${CALLS[k]}</option>`).join('')}</select></td>
     <td class="${isLate(c.followUp) ? 'late' : ''}">${fmt(c.followUp)}</td>
-    <td><div style="display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">
-      <button class="btn small" onclick="openClient('${c.id}')">Open</button>
-      <button class="btn small danger" onclick="delClient('${c.id}')">Delete</button>
-      ${c.source && /^https?:\/\//i.test(c.source) ? `<a class="btn small" href="${esc(c.source)}" target="_blank" rel="noopener">Link</a>` : ''}
-      ${c.phone ? `<a class="btn small" href="https://wa.me/${esc(c.phone.replace(/\D/g, ''))}" target="_blank">WhatsApp</a>` : ''}
-      ${c.email ? `<button class="btn small" onclick="openSendMailModal('${c.id}')" title="Send email to ${esc(c.email)}">&#9993; Email</button>` : ''}
+    <td class="client-actions-cell"><div class="client-actions">
+      <button class="btn small icon-action" onclick="openClient('${c.id}')" title="Open" aria-label="Open">${CLIENT_ACTION_ICONS.open}</button>
+      <button class="btn small danger icon-action" onclick="delClient('${c.id}')" title="Delete" aria-label="Delete">${CLIENT_ACTION_ICONS.delete}</button>
+      ${c.source && /^https?:\/\//i.test(c.source) && !/linkedin\.com/i.test(c.source) ? `<a class="btn small icon-action" href="${esc(c.source)}" target="_blank" rel="noopener" title="Link" aria-label="Link">${CLIENT_ACTION_ICONS.link}</a>` : ''}
+      ${c.phone ? `<a class="btn small icon-action" href="https://wa.me/${esc(c.phone.replace(/\D/g, ''))}" target="_blank" onclick="logTouch('${c.id}','whatsapp','WhatsApp opened')" title="WhatsApp" aria-label="WhatsApp">${CLIENT_ACTION_ICONS.whatsapp}</a>` : ''}
+      ${c.source && /linkedin\.com/i.test(c.source) ? `<a class="btn small icon-action" href="${esc(c.source)}" target="_blank" rel="noopener" onclick="logTouch('${c.id}','linkedin','LinkedIn profile opened')" title="LinkedIn" aria-label="LinkedIn">${CLIENT_ACTION_ICONS.linkedin}</a>` : ''}
+      ${c.phone ? `<a class="btn small primary icon-action" href="tel:${esc(c.phone)}" onclick="logCall('${c.id}', event)" title="Call" aria-label="Call">${CLIENT_ACTION_ICONS.call}</a>` : ''}
+      ${clientEmailAddresses(c).length && !c.optedOut ? `<button class="btn small icon-action" onclick="openSendMailModal('${c.id}')" title="Email" aria-label="Email">${CLIENT_ACTION_ICONS.email}</button>` : ''}
     </div></td>
-  </tr>`).join('') || '<tr><td colspan="6" class="empty">No clients in this view.</td></tr>'}
+  </tr>`).join('') || '<tr><td colspan="8" class="empty">No clients in this view.</td></tr>'}
   </tbody></table></div>${total > rows.length ? `<div class="actions" style="justify-content:center"><button class="btn" onclick="listLimit+=200;renderList()">Show more (${total - rows.length} not shown)</button></div>` : ''}`;
+  updateClientSelectionUI();
+}
+function updateClientSelectionUI() {
+  const toolbar = $('#bulkStatusToolbar');
+  if (!toolbar) return;
+  toolbar.hidden = selectedClientIds.size === 0;
+  $('#bulkSelectedCount').textContent = `${selectedClientIds.size} selected`;
+  const visibleSelected = renderedClientIds.filter(id => selectedClientIds.has(id)).length;
+  const selectVisible = $('#selectVisibleClients');
+  if (selectVisible) {
+    selectVisible.checked = renderedClientIds.length > 0 && visibleSelected === renderedClientIds.length;
+    selectVisible.indeterminate = visibleSelected > 0 && visibleSelected < renderedClientIds.length;
+  }
+}
+function toggleClientSelection(id, checked) {
+  if (checked) selectedClientIds.add(id); else selectedClientIds.delete(id);
+  updateClientSelectionUI();
+}
+function toggleVisibleClientSelection(checked) {
+  renderedClientIds.forEach(id => checked ? selectedClientIds.add(id) : selectedClientIds.delete(id));
+  document.querySelectorAll('.client-row-select').forEach(input => { input.checked = checked; });
+  updateClientSelectionUI();
+}
+function clearClientSelection() {
+  selectedClientIds.clear();
+  document.querySelectorAll('.client-row-select').forEach(input => { input.checked = false; });
+  updateClientSelectionUI();
+}
+async function applyBulkClientStatus() {
+  const ids = [...selectedClientIds];
+  const stage = $('#bulkStage')?.value || '';
+  const communicationStatus = $('#bulkCommunication')?.value || '';
+  const patch = {};
+  if (stage) patch.stage = stage;
+  if (communicationStatus) patch.communicationStatus = communicationStatus;
+  if (!ids.length || !Object.keys(patch).length) return toast('Choose a stage or communication status to apply.');
+
+  const button = $('#bulkApplyButton');
+  if (button) button.disabled = true;
+  const updatedIds = [], failures = [];
+  try {
+    for (const id of ids) {
+      try {
+        await api('/clients/' + id, 'PUT', patch);
+        updatedIds.push(id);
+      } catch (error) {
+        const client = clients.find(item => item.id === id);
+        failures.push(`${client?.name || id}: ${error.message}`);
+      }
+    }
+    try { await refresh(); }
+    catch (error) {
+      toast(`Status updates were sent, but the client list could not be refreshed: ${error.message}`);
+      return;
+    }
+    updatedIds.forEach(id => selectedClientIds.delete(id));
+    render();
+    if (failures.length) {
+      const details = failures.slice(0, 3).join('; ');
+      toast(`Updated ${updatedIds.length} of ${ids.length}. Failed: ${details}${failures.length > 3 ? `; and ${failures.length - 3} more` : ''}`);
+    } else toast(`Updated ${updatedIds.length} client(s).`);
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 let searchTimer;
 $('#search').addEventListener('input', () => {
@@ -162,7 +275,30 @@ $('#search').addEventListener('input', () => {
   }, 150);
 });
 
-async function quick(id, patch) { await api('/clients/' + id, 'PUT', patch); await refresh(); toast('Updated'); render(); }
+async function quick(id, patch) {
+  try {
+    const updated = await api('/clients/' + id, 'PUT', patch);
+    const index = clients.findIndex(c => c.id === id);
+    if (index >= 0) clients[index] = updated;
+    await refresh();
+    toast('Updated');
+    render();
+  } catch (error) {
+    toast(error.message || 'Could not save this change');
+    await refresh(); render();
+  }
+}
+async function logCall(id, event) {
+  // Let the browser launch the phone app immediately, and log the attempt in CRM.
+  const c = clients.find(x => x.id === id);
+  if (!c) return;
+  api(`/clients/${id}/activity`, 'POST', { type: 'call', note: `Call initiated to ${c.phone}` })
+    .then(() => refresh()).then(() => { renderNav(); if (page === 'dashboard') render(); })
+    .catch(() => toast('Call opened; activity could not be saved'));
+}
+async function logTouch(id, type, note) {
+  api(`/clients/${id}/activity`, 'POST', { type, note }).catch(() => toast(`${type} opened; activity could not be saved`));
+}
 
 // ---------- client modal ----------
 async function openClient(id) {
@@ -176,16 +312,20 @@ async function openClient(id) {
     <div><label>Name *</label><input id="f_name" value="${esc(c.name)}"></div>
     <div><label>Company</label><input id="f_company" value="${esc(c.company)}"></div>
     <div><label>Phone</label><input id="f_phone" value="${esc(c.phone)}"></div>
-    <div><label>Email</label><div style="display:flex;gap:6px"><input id="f_email" value="${esc(c.email)}" style="flex:1">${id && c.email ? `<button type="button" class="btn small primary" onclick="openSendMailModal('${id}')" title="Send email to this client" style="white-space:nowrap">&#9993; Send Mail</button>` : ''}</div></div>
+    <div><label>Primary email</label><div style="display:flex;gap:6px"><input id="f_email" value="${esc(c.email)}" style="flex:1">${id && clientEmailAddresses(c).length && !c.optedOut ? `<button type="button" class="btn small primary" onclick="openSendMailModal('${id}')" title="Send email to this client" style="white-space:nowrap">&#9993; Send Mail</button>` : ''}</div></div>
+    <div class="full"><label>Additional email addresses (one per line)</label><textarea id="f_alternateEmails" placeholder="accounts@example.com&#10;owner@example.com">${esc((c.alternateEmails || []).join('\n'))}</textarea></div>
     <div><label>Location</label><input id="f_location" value="${esc(c.location || '')}"></div>
     <div><label>Source / Link ${c.source && /^https?:\/\//i.test(c.source) ? `<a href="${esc(c.source)}" target="_blank" rel="noopener" style="font-size:11px;margin-left:6px">&#x2197; Open</a>` : ''}</label><input id="f_source" value="${esc(c.source || '')}"></div>
     <div><label>Stage</label><select id="f_stage">${Object.keys(STAGES).map(k => `<option value="${k}" ${(c.stage || 'new') === k ? 'selected' : ''}>${STAGES[k]}</option>`).join('')}</select></div>
     <div><label>Call status</label><select id="f_call">${Object.keys(CALLS).map(k => `<option value="${k}" ${(c.callStatus || 'not_called') === k ? 'selected' : ''}>${CALLS[k]}</option>`).join('')}</select></div>
+    <div><label>Communication status</label><select id="f_comm">${Object.keys(COMMUNICATION).map(k => `<option value="${k}" ${(c.communicationStatus || 'not_contacted') === k ? 'selected' : ''}>${COMMUNICATION[k]}</option>`).join('')}</select></div>
     <div class="full"><label>Next follow-up (reminder)</label><input type="datetime-local" id="f_follow" value="${toLocalInput(c.followUp)}"></div>
     <div class="full"><label>Notes</label><textarea id="f_notes">${esc(c.notes)}</textarea></div>
+    <div class="full"><label style="display:flex;gap:8px;align-items:center"><input id="f_optedOut" type="checkbox" style="width:auto" ${c.optedOut ? 'checked' : ''}> Do not email this lead (opted out)</label></div>
   </div>
   <div class="actions">
-    ${id && c.email ? `<button type="button" class="btn" onclick="openSendMailModal('${id}')">&#9993; Send email</button>` : ''}
+    ${id && clientEmailAddresses(c).length && !c.optedOut ? `<button type="button" class="btn" onclick="openSendMailModal('${id}')">&#9993; Send email</button>` : ''}
+    ${id && c.phone && settings.whatsapp?.accessToken ? `<button type="button" class="btn" onclick="sendWhatsApp('${id}')">WhatsApp Business</button>` : ''}
     ${id ? `<button class="btn danger" onclick="delClient('${id}')">Delete client</button>` : ''}
     <button class="btn" onclick="closeModal()">Close</button>
     <button class="btn primary" onclick="saveClient('${id || ''}')">Save</button>
@@ -195,7 +335,7 @@ async function openClient(id) {
     <div style="display:flex;gap:8px;margin:10px 0"><input id="a_note" style="flex:1" placeholder="Type note or paste the client's message...">
     <button class="btn small" onclick="addAct('${id}','note')">Add note</button>
     <button class="btn small primary" onclick="addAct('${id}','reply')">Client replied</button></div>
-    ${acts.map(a => `<div><small>${fmt(a.at)} · ${a.type}</small><br>${esc(a.note)}</div>`).join('') || '<div class="empty">No activity yet.</div>'}</div>` : ''}`;
+    ${acts.map(a => `<div><small>${fmt(a.at)} · ${a.type}${a.deliveryStatus ? ` · ${esc(a.deliveryStatus)}` : ''}</small><br>${esc(a.note)}</div>`).join('') || '<div class="empty">No activity yet.</div>'}</div>` : ''}`;
   $('#modal').classList.remove('hidden');
 }
 function closeModal() { $('#modal').classList.add('hidden'); }
@@ -204,8 +344,9 @@ $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeM
 async function saveClient(id) {
   const body = {
     name: $('#f_name').value.trim(), company: $('#f_company').value, phone: $('#f_phone').value, email: $('#f_email').value,
+    alternateEmails: $('#f_alternateEmails').value.split(/[\s,;]+/).filter(Boolean),
     location: $('#f_location') ? $('#f_location').value : '', source: $('#f_source') ? $('#f_source').value : '',
-    stage: $('#f_stage').value, callStatus: $('#f_call').value, notes: $('#f_notes').value,
+    stage: $('#f_stage').value, callStatus: $('#f_call').value, communicationStatus: $('#f_comm').value, notes: $('#f_notes').value, optedOut: $('#f_optedOut').checked,
     followUp: $('#f_follow').value ? new Date($('#f_follow').value).toISOString() : ''
   };
   if (!body.name) return toast('Name is required');
@@ -224,9 +365,39 @@ async function addAct(id, type) {
   if (result.error) return toast(result.error);
   await refresh(); openClient(id); renderNav();
 }
+async function sendWhatsApp(id) {
+  const c = clients.find(x => x.id === id); if (!c) return;
+  const message = prompt(`WhatsApp message to ${c.name}:`, `Hi ${c.name}, following up from Right Head.`);
+  if (!message?.trim()) return;
+  if (!confirm(`Send this WhatsApp message to ${c.phone}?`)) return;
+  try {
+    const result = await api('/whatsapp/send', 'POST', { clientId: id, message });
+    toast(result.status === 'accepted' ? 'WhatsApp message accepted by Meta' : 'WhatsApp message sent');
+    await refresh(); openClient(id); renderNav();
+  } catch (e) { toast(e.message); }
+}
 
 // ---------- mass mail ----------
 let mailTpls = [];
+let singleMailThread = null;
+let selectedMailAddresses = new Set();
+let mailSelectionQuery = '';
+let mailChoiceLimit = 100;
+const clientEmailAddresses = c => {
+  const seen = new Set();
+  return [c.email, ...(Array.isArray(c.alternateEmails) ? c.alternateEmails : [])]
+    .filter(email => typeof email === 'string' && email.trim())
+    .map(email => email.trim())
+    .filter(email => {
+      const normalized = email.toLowerCase();
+      if (seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    });
+};
+const mailAddressKey = (id, email) => `${id}\n${email.toLowerCase()}`;
+const canMailClient = c => clientEmailAddresses(c).length && c.stage !== 'rejected' && !c.optedOut && c.communicationStatus !== 'opted_out';
+
 async function renderMail() {
   const camps = await api('/campaigns');
   mailTpls = await api('/templates');
@@ -237,22 +408,113 @@ async function renderMail() {
   <div class="grid cols">
     <div class="panel"><h3>New campaign</h3>
       <label>Audience</label>
-      <select id="m_aud" onchange="audCount()"><option value="all">All clients with email (excluding Red Zone)</option>
+      <select id="m_aud" onchange="changeMailAudience()"><option value="all">All eligible clients (excluding Red Zone)</option>
+        <option value="selected">Choose individual clients</option>
         ${Object.keys(STAGES).filter(k => k !== 'rejected').map(k => `<option value="${k}">${STAGES[k]}</option>`).join('')}</select>
       <div id="m_cnt" class="empty"></div>
+      <div id="m_selection" style="display:none">
+        <label style="margin-top:8px;display:block">Find clients</label>
+        <input id="m_client_search" type="search" placeholder="Search name, company, or email" value="${esc(mailSelectionQuery)}" oninput="mailSelectionQuery=this.value;mailChoiceLimit=100;renderMailSelection()">
+        <div class="actions">
+          <button class="btn small" onclick="selectVisibleMailClients()">Select visible primary emails</button>
+          <button class="btn small" onclick="clearMailClientSelection()">Clear selection</button>
+        </div>
+        <div id="m_client_summary" class="empty"></div>
+        <div id="m_client_choices" class="mail-client-picker"></div>
+        <div class="note">Red Zone and opted-out clients are excluded. You can select clients from any other stage.</div>
+      </div>
       <label>Start from a template</label>
       <select id="m_tpl" onchange="loadTemplate(this.value)"><option value="">- none -</option>${mailTpls.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
       <label style="margin-top:8px;display:block">Subject</label><input id="m_sub" placeholder="e.g. Hello {{name}}, a quick update from us">
       <label style="margin-top:8px;display:block">Message (use {{name}}, {{company}})</label>
       <textarea id="m_body" style="min-height:180px" placeholder="Hi {{name}},&#10;&#10;..."></textarea>
       ${aiWriterBox('m_sub', 'm_body')}
+      <label class="mail-thread-option"><input id="m_replyToLast" type="checkbox"> Send as follow-up to each recipient’s last email thread (numbered automatically)</label>
+      <div class="empty">When enabled, the CRM keeps each recipient’s existing subject and adds “Re:” so the message stays in that conversation; the campaign Subject above is ignored. Automated sequence reminders continue in the same thread after the initial email.</div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="m_sequence" type="checkbox" style="width:auto" onchange="toggleSequenceEditor()"> Create automated sequence: initial email + 4 follow-ups</label>
+      <div class="empty">Clients who don’t reply or onboard are moved to Red Zone 3 days after the final follow-up. Record a reply with “Client replied” to move them to Blue; mark onboarded clients Green.</div>
+      <div id="sequenceEditor" class="full"></div>
       <div class="actions"><button class="btn" onclick="saveAsTemplate()">Save as template</button><button id="mailSendBtn" class="btn primary" onclick="sendMail()">Send campaign</button></div>
     </div>
     <div class="panel"><h3>Campaign history</h3>
-      ${camps.map(m => `<div class="item"><b>${esc(m.subject)}</b><small>${fmt(m.at)} · audience: ${esc(m.audience)} · ${m.sent}/${m.total} sent${m.simulated ? ' (simulated)' : ''}${m.failed ? ' · ' + m.failed + ' failed' : ''}${m.skipped ? ' · ' + m.skipped + ' skipped' : ''}${m.status === 'sending' ? ' · sending' : m.status === 'interrupted' ? ' · interrupted' : ''}</small>${m.errors && m.errors.length ? `<details><summary>${m.errors.length} send error(s)</summary>${m.errors.map(e => `<div class="empty">${esc(e)}</div>`).join('')}</details>` : ''}</div>`).join('') || '<div class="empty">No campaigns yet.</div>'}
+      ${camps.map(m => `<div class="item"><b>${esc(m.subject)}</b><small>${fmt(m.at)} · audience: ${esc(m.audience)} · ${m.type === 'sequence' ? `${m.sent || 0} email(s), ${m.total} leads · ${m.recipients?.filter(r => r.status === 'awaiting_outcome').length || 0} awaiting final response · ` : `${m.sent}/${m.total} sent · `}${m.simulated ? 'simulation mode · ' : ''}Status: ${esc(m.status)}${m.nextRunAt ? ` · next run ${fmt(m.nextRunAt)}` : ''}${m.failed ? ` · ${m.failed} failed` : ''}${m.skipped ? ` · ${m.skipped} skipped` : ''}${m.recipients?.filter(r => r.status === 'review').length ? ` · ${m.recipients.filter(r => r.status === 'review').length} uncertain delivery(ies)` : ''}</small>
+        ${m.type === 'sequence' ? `<div class="actions"><button class="btn small" onclick="sequenceAction('${m.id}','${m.status === 'active' ? 'pause' : m.status === 'paused' ? (m.startedAt ? 'resume' : 'start') : ''}')" ${['active','paused'].includes(m.status) ? '' : 'disabled'}>${m.status === 'active' ? 'Pause' : m.status === 'paused' ? (m.startedAt ? 'Resume' : 'Start') : 'Start'}</button><button class="btn small" onclick="editSequence('${m.id}')" ${['paused','stopped'].includes(m.status) ? '' : 'disabled'}>Edit</button><button class="btn small danger" onclick="sequenceAction('${m.id}','stop')" ${['active','paused'].includes(m.status) ? '' : 'disabled'}>Stop</button></div>` : ''}
+        ${m.errors && m.errors.length ? `<details><summary>${m.errors.length} send error(s)</summary>${m.errors.map(e => `<div class="empty">${esc(e)}</div>`).join('')}</details>` : ''}</div>`).join('') || '<div class="empty">No campaigns yet.</div>'}
     </div>
   </div>`;
+  if ($('#m_aud').value === 'selected') {
+    $('#m_selection').style.display = '';
+    renderMailSelection();
+  }
   audCount();
+}
+function mailSelectionMatches() {
+  const query = mailSelectionQuery.trim().toLowerCase();
+  return clients.filter(canMailClient).filter(c =>
+    !query || [c.name, c.company, ...clientEmailAddresses(c)].some(value => String(value || '').toLowerCase().includes(query))
+  );
+}
+function renderMailSelection() {
+  const choices = $('#m_client_choices');
+  if (!choices) return;
+  const matches = mailSelectionMatches();
+  const visible = matches.slice(0, mailChoiceLimit);
+  const selectedCount = getSelectedMailRecipients().length;
+  $('#m_client_summary').textContent = `${selectedCount} address(es) selected · showing ${visible.length} of ${matches.length} eligible clients`;
+  choices.innerHTML = visible.map(c => {
+    const addresses = clientEmailAddresses(c);
+    return `<div class="mail-client-option">
+      <b>${esc(c.name || c.company || addresses[0])}</b><small>${esc(c.company || '')}${c.company ? ' · ' : ''}${esc(STAGES[c.stage] || c.stage || 'New')}</small>
+      <div class="mail-client-addresses">${addresses.map((email, index) => `<label class="mail-address-option">
+        <input type="checkbox" value="${esc(email)}" ${selectedMailAddresses.has(mailAddressKey(c.id, email)) ? 'checked' : ''} onchange="toggleMailAddress('${esc(c.id)}',this.value,this.checked)">
+        <span>${esc(email)}${index === 0 ? ' · primary' : ''}</span>
+      </label>`).join('')}</div>
+    </div>`;
+  }).join('') || '<div class="empty">No eligible clients match this search.</div>';
+  if (matches.length > visible.length) {
+    choices.insertAdjacentHTML('beforeend', `<button class="btn small" style="margin:8px" onclick="showMoreMailClients()">Show more clients</button>`);
+  }
+}
+function changeMailAudience() {
+  const selection = $('#m_selection');
+  if (selection) selection.style.display = $('#m_aud').value === 'selected' ? '' : 'none';
+  if ($('#m_aud').value === 'selected') renderMailSelection();
+  audCount();
+}
+function toggleMailAddress(id, email, checked) {
+  const key = mailAddressKey(id, email);
+  if (checked) selectedMailAddresses.add(key);
+  else selectedMailAddresses.delete(key);
+  renderMailSelection();
+  audCount();
+}
+function selectVisibleMailClients() {
+  mailSelectionMatches().slice(0, mailChoiceLimit).forEach(c => {
+    const primary = clientEmailAddresses(c)[0];
+    if (primary) selectedMailAddresses.add(mailAddressKey(c.id, primary));
+  });
+  renderMailSelection();
+  audCount();
+}
+function clearMailClientSelection() {
+  selectedMailAddresses.clear();
+  renderMailSelection();
+  audCount();
+}
+function getSelectedMailRecipients() {
+  const selected = [], seenEmails = new Set();
+  clients.filter(canMailClient).forEach(c => {
+    clientEmailAddresses(c).forEach(email => {
+      if (!selectedMailAddresses.has(mailAddressKey(c.id, email)) || seenEmails.has(email.toLowerCase())) return;
+      seenEmails.add(email.toLowerCase());
+      selected.push({ clientId: c.id, email });
+    });
+  });
+  return selected;
+}
+function showMoreMailClients() {
+  mailChoiceLimit += 100;
+  renderMailSelection();
 }
 function loadTemplate(id) {
   const t = mailTpls.find(x => x.id === id); if (!t) return;
@@ -267,18 +529,71 @@ async function saveAsTemplate() {
   if (r.error) return toast(r.error);
   toast('Saved as template'); renderMail();
 }
-async function audCount() { const r = await api('/mail/audience/' + $('#m_aud').value); $('#m_cnt').textContent = `${r.count} recipient(s) with an email address`; }
+function toggleSequenceEditor() {
+  const box = $('#sequenceEditor');
+  if (!$('#m_sequence')?.checked) { box.innerHTML = ''; return; }
+  const subject = $('#m_sub').value.trim() || 'Following up, {{name}}';
+  const body = $('#m_body').value.trim() || 'Hi {{name}},\n\nI wanted to follow up on my earlier message. Please let me know if this is of interest.\n\nRegards,\nRight Head';
+  box.innerHTML = [1, 3, 5, 7, 9].map((day, i) => `<details ${i === 0 ? 'open' : ''} style="margin:10px 0"><summary>Day ${day} email</summary><label>Subject</label><input id="seq_sub_${i}" value="${esc(i ? `Re: ${subject}` : subject)}"><label>Message</label><textarea id="seq_body_${i}" style="min-height:100px">${esc(i ? `Hi {{name}},\n\nFollowing up on my earlier note.\n\n${body}` : body)}</textarea></details>`).join('');
+}
+async function sequenceAction(id, action) {
+  if (!action) return;
+  if (action === 'stop' && !confirm('Stop this follow-up sequence for all remaining recipients?')) return;
+  try {
+    if (action === 'resume') {
+      const campaign = (await api('/campaigns')).find(c => c.id === id);
+      const review = campaign?.recipients?.filter(r => r.status === 'review').length || 0;
+      if (review && !confirm(`${review} message delivery status is unknown after a restart. Resume will skip those messages to avoid sending duplicates. Continue?`)) return;
+    }
+    await api(`/campaigns/${id}/action`, 'POST', { action }); toast(`Sequence ${action}d`); await renderMail();
+  }
+  catch (e) { toast(e.message); }
+}
+async function editSequence(id) {
+  const campaign = (await api('/campaigns')).find(c => c.id === id);
+  if (!campaign) return;
+  const steps = campaign.steps.map(s => ({ ...s }));
+  for (let i = 0; i < steps.length; i++) {
+    const subject = prompt(`Day ${steps[i].day} subject`, steps[i].subject); if (subject === null) return;
+    const body = prompt(`Day ${steps[i].day} message`, steps[i].body); if (body === null) return;
+    steps[i] = { subject, body };
+  }
+  try { await api(`/campaigns/${id}/action`, 'POST', { action: 'edit', steps }); toast('Sequence updated'); await renderMail(); }
+  catch (e) { toast(e.message); }
+}
+async function audCount() {
+  const audience = $('#m_aud')?.value;
+  if (!audience) return;
+  if (audience === 'selected') {
+    const count = getSelectedMailRecipients().length;
+    $('#m_cnt').textContent = `${count} selected email address(es)`;
+    return;
+  }
+  const r = await api('/mail/audience/' + audience);
+  $('#m_cnt').textContent = `${r.count} recipient(s) with an eligible email address`;
+}
 async function sendMail() {
   const subject = $('#m_sub').value.trim(), body = $('#m_body').value.trim();
   if (!subject || !body) return toast('Subject and message are required');
-  if (!confirm('Send this campaign now?')) return;
+  const audience = $('#m_aud').value;
+  const recipients = audience === 'selected'
+    ? getSelectedMailRecipients()
+    : undefined;
+  if (audience === 'selected' && !recipients.length) return toast('Select at least one email address');
+  const sequence = $('#m_sequence')?.checked;
+  const recipientLabel = audience === 'selected' ? `${recipients.length} selected email address(es)` : 'the selected audience';
+  const replyToLast = $('#m_replyToLast')?.checked || false;
+  const sendDescription = replyToLast ? ' as numbered replies in each recipient’s last email thread' : '';
+  if (!confirm(sequence ? `Create this automated email sequence for ${recipientLabel}${sendDescription}? It starts sending on Day 1 after you press Start.` : `Send this campaign to ${recipientLabel}${sendDescription} now?`)) return;
   const button = $('#mailSendBtn');
   if (button) button.disabled = true;
   try {
   toast('Sending... please wait');
-  const r = await api('/mail/send', 'POST', { audience: $('#m_aud').value, subject, body });
+  const r = sequence
+    ? await api('/sequences', 'POST', { audience, ...(recipients ? { recipients } : {}), replyToLast, steps: [1, 3, 5, 7, 9].map((day, i) => ({ day, subject: $(`#seq_sub_${i}`).value, body: $(`#seq_body_${i}`).value })) })
+    : await api('/mail/send', 'POST', { audience, ...(recipients ? { recipients } : {}), subject, body, replyToLast });
   if (r.error) return toast(r.error);
-  toast(`Done: ${r.sent}/${r.total} ${r.simulated ? 'simulated' : 'sent'}${r.failed ? ', ' + r.failed + ' failed' : ''}${r.skipped ? ', ' + r.skipped + ' skipped' : ''}`);
+  toast(sequence ? 'Sequence saved as paused. Press Start to schedule Day 1.' : `Done: ${r.sent}/${r.total} ${r.simulated ? 'simulated' : 'sent'}${r.failed ? ', ' + r.failed + ' failed' : ''}${r.skipped ? ', ' + r.skipped + ' skipped' : ''}`);
   await refresh(); render();
   } finally {
     if (button) button.disabled = false;
@@ -288,6 +603,7 @@ async function sendMail() {
 // ---------- settings & import ----------
 async function renderSettings() {
   settings = await api('/settings'); const s = settings.smtp;
+  const w = settings.whatsapp || {};
   const general = await aiSettingsPanel();
   const smtpConfigured = s.host && s.user;
   $('#view').innerHTML = `<div class="settings-grid">
@@ -317,6 +633,19 @@ async function renderSettings() {
       </div>
     </div>
 
+    <div class="panel">
+      <h3><span>WhatsApp Business Cloud API</span><span class="badge ${w.accessToken && w.phoneNumberId ? 'b-onboarded' : 'b-new'}">${w.accessToken && w.phoneNumberId ? 'Configured' : 'Setup needed'}</span></h3>
+      <div class="form">
+        <div class="full"><label>Permanent access token</label><input id="w_token" type="password" value="${esc(w.accessToken)}" placeholder="Paste Meta access token" autocomplete="new-password"></div>
+        <div><label>Phone number ID</label><input id="w_phoneId" value="${esc(w.phoneNumberId || '')}"></div>
+        <div><label>Graph API version</label><input id="w_version" value="${esc(w.apiVersion || '')}" placeholder="vXX.X"></div>
+        <div><label>Webhook verify token</label><input id="w_verify" type="password" value="${esc(w.verifyToken)}" autocomplete="new-password"></div>
+        <div><label>Meta app secret</label><input id="w_secret" type="password" value="${esc(w.appSecret)}" autocomplete="new-password"></div>
+      </div>
+      <div class="note">Secrets are encrypted in CRM storage. Webhook URL for delivery tracking: <code>${esc(location.origin)}/api/webhooks/whatsapp</code>. Configure the WhatsApp messages webhook in Meta. API accepted messages are marked delivered only when Meta confirms by webhook. Use approved templates as required by Meta.</div>
+      <div class="actions"><button class="btn primary" onclick="saveSettings()">Save WhatsApp Settings</button><button class="btn" onclick="testWhatsApp(this)">Test Connection</button></div>
+    </div>
+
     <!-- Block 3: Database Backup & Security -->
     <div class="panel">
       <h3>
@@ -327,8 +656,8 @@ async function renderSettings() {
         <div style="display:flex;gap:12px;align-items:center;background:var(--grey-bg);padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--line);">
           <div style="font-size:22px;line-height:1">💾</div>
           <div style="flex:1;">
-            <div style="font-weight:600;font-size:13px;color:var(--ink);">SQLite Storage (WAL Mode)</div>
-            <div style="font-size:11.5px;color:var(--muted);">Zero external server overhead. Point-in-time transactions.</div>
+            <div style="font-weight:600;font-size:13px;color:var(--ink);">Encrypted CRM Database</div>
+            <div style="font-size:11.5px;color:var(--muted);">Neon PostgreSQL in production; SQLite remains available for isolated compatibility tests.</div>
           </div>
         </div>
         <div style="display:flex;gap:12px;align-items:center;background:var(--grey-bg);padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--line);">
@@ -339,11 +668,11 @@ async function renderSettings() {
           </div>
         </div>
         <div style="font-size:12px;color:var(--muted);line-height:1.45;margin-top:2px;">
-          Download a checkpointed SQLite backup. Keep this backup safe and store the encryption key separately in your company password manager.
+          Store backups as confidential; production exports include decrypted record values. Keep the encryption key separately in your company password manager.
         </div>
       </div>
       <div class="actions">
-        <a class="btn primary" href="/api/backup" style="width:100%;justify-content:center;">📥 Download Encrypted Backup (.sqlite)</a>
+        <a class="btn primary" href="/api/backup" style="width:100%;justify-content:center;">Download CRM Backup</a>
       </div>
     </div>
 
@@ -388,8 +717,15 @@ async function renderSettings() {
   </div>`;
 }
 async function saveSettings() {
-  await api('/settings', 'PUT', { smtp: { host: $('#s_host').value, port: $('#s_port').value, user: $('#s_user').value, pass: $('#s_pass').value, from: $('#s_from').value, secure: $('#s_secure').value === 'true' } });
+  await api('/settings', 'PUT', { smtp: { host: $('#s_host').value, port: $('#s_port').value, user: $('#s_user').value, pass: $('#s_pass').value, from: $('#s_from').value, secure: $('#s_secure').value === 'true' }, whatsapp: { accessToken: $('#w_token').value, phoneNumberId: $('#w_phoneId').value, apiVersion: $('#w_version').value, verifyToken: $('#w_verify').value, appSecret: $('#w_secret').value } });
+  settings = await api('/settings');
   toast('Settings saved');
+}
+async function testWhatsApp(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Testing...'; }
+  try { await saveSettings(); const r = await api('/whatsapp/test', 'POST', {}); toast(`WhatsApp connected${r.phone ? `: ${r.phone}` : ''}`); }
+  catch (e) { toast(e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = 'Test Connection'; } }
 }
 async function testSmtp() {
   const btn = $('#smtpTestBtn'); btn.disabled = true; btn.textContent = 'Testing...';
@@ -406,6 +742,7 @@ const HEADER_ALIASES = {
   company: ['company', 'companyname', 'organization', 'organisation', 'business', 'businessname', 'firm'],
   phone: ['phone', 'phoneno', 'phonenumber', 'mobile', 'mobileno', 'mobilenumber', 'contactno', 'contactnumber', 'whatsapp', 'whatsappnumber', 'cell', 'telephone', 'tel'],
   email: ['email', 'emailid', 'emailaddress', 'mail', 'mailid'],
+  alternateEmails: ['alternateemails', 'additionalemail', 'otheremail', 'secondaryemail', 'email2'],
   source: ['source', 'leadsource'],
   link: ['link', 'website', 'url', 'links', 'linkedin', 'profile', 'profileurl', 'profilelink', 'weburl', 'sheetlink'],
   stage: ['status', 'clientstatus', 'leadstatus', 'stage'],
@@ -459,6 +796,7 @@ function rowsToObjects(table) {
     heads.forEach((h, i) => {
       const value = String(r[i] ?? '').trim(), f = fields[i];
       if (!value) return;
+      if (f === 'alternateEmails') { (o.alternateEmails ||= []).push(value); return; }
       if (!f || o[f]) { if (h) o.other.push(`${h}: ${value}`); return; } // unknown or repeated column
       if (f === 'stage') { const s = value.toLowerCase().replace(/[\s-]+/g, '_'); o[f] = STAGE_ALIASES[s] || s; }
       else if (f === 'callStatus') o[f] = value.toLowerCase().replace(/[\s-]+/g, '_');
@@ -528,6 +866,7 @@ function prepareImportRows(rawRows) {
     if (r.company) row.company = r.company;
     if (r.phone) row.phone = r.phone;
     if (r.email) row.email = r.email;
+    if (r.alternateEmails) row.alternateEmails = r.alternateEmails.flatMap(value => String(value).split(/[\s,;]+/)).filter(Boolean);
     if (r.location) row.location = r.location;
     if (r.source || r.link) row.source = r.source || r.link || '';
     if (r.dateadded) {
@@ -617,19 +956,25 @@ window.addEventListener('unhandledrejection', event => {
 });
 
 (async function init() {
+  try { applyTheme(localStorage.getItem('crm-theme') || 'light'); } catch (_) { applyTheme('light'); }
   settings = await api('/settings');
+  applyTheme(settings.theme || document.documentElement.dataset.theme);
   $('#brandName').textContent = (settings.company || 'Company') + ' CRM';
   document.title = $('#brandName').textContent;
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
   await refresh(); render(); checkReminders();
-  setInterval(async () => { if (document.hidden) return; await refresh(); checkReminders(); renderNav(); }, 60000);
+  setInterval(async () => { if (document.hidden) return; await refresh(); checkReminders(); renderNav(); if (page === 'dashboard') renderDashboard(); }, 60000);
 })();
 
 // ---------- individual client email composer ----------
-async function openSendMailModal(clientId) {
+async function openSendMailModal(clientId, preferredEmail) {
   const c = clients.find(x => x.id === clientId);
   if (!c) return toast('Client not found');
-  if (!c.email) return toast('This client has no email address');
+  singleMailThread = null;
+  const addresses = clientEmailAddresses(c);
+  if (!addresses.length) return toast('This client has no email address');
+  const defaultEmail = addresses.find(email => email.toLowerCase() === String(preferredEmail || '').toLowerCase()) ||
+    addresses.find(email => email.toLowerCase() === String(c.email || '').toLowerCase()) || addresses[0];
 
   // Load templates if not loaded yet
   if (!mailTpls || !mailTpls.length) {
@@ -642,11 +987,15 @@ async function openSendMailModal(clientId) {
     <button class="btn small" onclick="openClient('${clientId}')" title="Back to client" style="border:0;background:transparent;font-size:22px;cursor:pointer;color:var(--muted);padding:0 6px;line-height:1">&times;</button>
   </div>
   <div style="background:var(--grey-bg, #f8fafc);border:1px solid var(--border, #e2e8f0);padding:10px 14px;border-radius:var(--radius, 8px);margin-bottom:14px;font-size:13px;display:flex;gap:16px;flex-wrap:wrap">
-    <div><b>Recipient:</b> ${esc(c.name)} &lt;${esc(c.email)}&gt;</div>
+    <div><b>Recipient:</b> ${esc(c.name)}</div>
     ${c.company ? `<div><b>Company:</b> ${esc(c.company)}</div>` : ''}
     ${c.stage ? `<div><b>Stage:</b> ${STAGES[c.stage] || c.stage}</div>` : ''}
   </div>
   <div class="form" style="display:block">
+    <div style="margin-bottom:12px">
+      <label>Email address</label>
+      <select id="sm_to" onchange="refreshSingleMailThread('${clientId}')">${addresses.map(email => `<option value="${esc(email)}" ${email === defaultEmail ? 'selected' : ''}>${esc(email)}${email === defaultEmail ? ' · primary' : ''}</option>`).join('')}</select>
+    </div>
     <div style="margin-bottom:12px">
       <label>Choose a Template (optional)</label>
       <select id="sm_tpl" onchange="applyTemplateToSingleMail('${clientId}', this.value)" style="width:100%">
@@ -656,8 +1005,10 @@ async function openSendMailModal(clientId) {
     </div>
     <div style="margin-bottom:12px">
       <label>Subject *</label>
-      <input id="sm_subject" style="width:100%" placeholder="e.g. Follow-up from Right Head regarding...">
+      <input id="sm_subject" style="width:100%" placeholder="e.g. Follow-up from Right Head regarding..." oninput="this.dataset.edited='true'">
     </div>
+    <div id="sm_thread_notice" class="mail-thread-notice" aria-live="polite"></div>
+    <label id="sm_new_thread_row" class="mail-thread-option" hidden><input id="sm_new_thread" type="checkbox" onchange="updateSingleMailThreadNotice()"> Start a new email conversation</label>
     <div style="margin-bottom:12px">
       <label>Message * (supports {{name}}, {{company}})</label>
       <textarea id="sm_body" style="width:100%;min-height:170px" placeholder="Hi ${esc(c.name || 'there')},&#10;&#10;..."></textarea>
@@ -666,9 +1017,49 @@ async function openSendMailModal(clientId) {
   </div>
   <div class="actions">
     <button class="btn" onclick="openClient('${clientId}')">Back to Client</button>
-    <button id="sm_sendBtn" class="btn primary" onclick="sendSingleMail('${clientId}')">Send Email</button>
+    <button id="sm_sendBtn" class="btn primary" onclick="sendSingleMail('${clientId}')" disabled>Send Email</button>
   </div>`;
   $('#modal').classList.remove('hidden');
+  await refreshSingleMailThread(clientId);
+}
+
+async function refreshSingleMailThread(clientId) {
+  const email = $('#sm_to')?.value;
+  if (!email) return;
+  const sendButton = $('#sm_sendBtn');
+  if (sendButton) sendButton.disabled = true;
+  try {
+    const thread = await api(`/mail/thread?clientId=${encodeURIComponent(clientId)}&email=${encodeURIComponent(email)}`);
+    if ($('#sm_to')?.value !== email) return;
+    singleMailThread = { ...thread, email };
+    updateSingleMailThreadNotice(true);
+    if (sendButton) sendButton.disabled = false;
+  } catch (error) {
+    singleMailThread = null;
+    const notice = $('#sm_thread_notice');
+    if (notice) notice.textContent = `Could not load this email’s follow-up history: ${error.message}`;
+  }
+}
+function updateSingleMailThreadNotice(resetSubject = false) {
+  const thread = singleMailThread;
+  const notice = $('#sm_thread_notice'), newThreadRow = $('#sm_new_thread_row'), newThread = $('#sm_new_thread');
+  const subject = $('#sm_subject');
+  if (!thread || !notice || !newThreadRow || !newThread || !subject) return;
+  const continuing = thread.hasHistory && !newThread.checked;
+  newThreadRow.hidden = !thread.hasHistory;
+  subject.readOnly = continuing;
+  if (continuing) {
+    const n = thread.nextFollowUpNumber;
+    notice.textContent = thread.canReply
+      ? `Follow-up #${n}: this message will reply in the existing email thread.`
+      : `Follow-up #${n}: the previous email has no saved thread ID, so this uses Re: and may appear as a new conversation.`;
+  } else {
+    notice.textContent = thread.hasHistory ? 'This email will start a new conversation.' : 'This is the first email to this address.';
+  }
+  if (resetSubject || !subject.dataset.edited) {
+    subject.value = continuing ? `Re: ${thread.threadSubject}` : '';
+    delete subject.dataset.edited;
+  }
 }
 
 function applyTemplateToSingleMail(clientId, tplId) {
@@ -679,7 +1070,8 @@ function applyTemplateToSingleMail(clientId, tplId) {
   const sub = $('#sm_subject'), body = $('#sm_body');
   if ((sub.value || body.value) && !confirm('Replace current subject and message with this template?')) return;
   const fill = (str) => String(str || '').replace(/{{\s*(name|company|email|phone)\s*}}/gi, (_, k) => c[k.toLowerCase()] || '');
-  sub.value = fill(t.subject);
+  const continuing = Boolean(singleMailThread?.hasHistory && !$('#sm_new_thread')?.checked);
+  sub.value = continuing ? `Re: ${singleMailThread.threadSubject}` : fill(t.subject);
   body.value = fill(t.body);
 }
 
@@ -688,22 +1080,31 @@ async function sendSingleMail(clientId) {
   if (!c) return toast('Client not found');
   const subject = $('#sm_subject').value.trim();
   const body = $('#sm_body').value.trim();
+  const email = $('#sm_to').value;
+  if (!singleMailThread || singleMailThread.email !== email) return toast('Wait for this email address’s follow-up history to load.');
   if (!subject || !body) return toast('Subject and message are required');
+  const replyToLast = Boolean(singleMailThread?.hasHistory && !$('#sm_new_thread')?.checked);
+  const followUpNumber = replyToLast ? singleMailThread.nextFollowUpNumber : 0;
 
   if (c.stage === 'rejected' && !confirm(`${c.name} is in the Red Zone (said no). Send anyway?`)) return;
-  if (!confirm(`Send this email to ${c.email}?`)) return;
+  if (!confirm(replyToLast
+    ? `Send follow-up #${followUpNumber} to ${email} in the existing email thread?`
+    : `Send this email to ${email}?`)) return;
 
   const btn = $('#sm_sendBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
 
   try {
-    const res = await api('/mail/send-one', 'POST', { clientId, subject, body });
+    const res = await api('/mail/send-one', 'POST', { clientId, email, subject, body, replyToLast });
     if (res.error) return toast('Failed: ' + res.error);
 
-    toast(res.simulated ? 'Simulated send (logged in activity)' : `Email sent to ${c.email}`);
+    toast(res.simulated
+      ? `Simulated ${res.isFollowUp ? `follow-up #${res.followUpNumber}` : 'email'} to ${email} (logged in activity)`
+      : res.isFollowUp ? `Follow-up #${res.followUpNumber} sent to ${email}` : `Email sent to ${email}`);
     await refresh();
     openClient(clientId);
     renderNav();
+    if (page === 'dashboard') renderDashboard();
   } catch (err) {
     const msg = err.message || 'Unknown error';
     if (msg.includes('Sandbox') || msg.includes('resend.com/domains') || msg.includes('only send testing emails')) {

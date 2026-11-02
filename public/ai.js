@@ -1,4 +1,4 @@
-/* Claude-powered features UI. Loaded before app.js; uses its helpers at call time. */
+/* Configurable-provider AI features UI. Loaded before app.js; uses its helpers at call time. */
 
 const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) { return ''; } })();
 const DRAFT_GOALS = {
@@ -65,7 +65,7 @@ function aiShowDraftForm(prefill) {
   const c = aiClient(); if (!c) return;
   $('#aiOut').innerHTML = `<div class="ai-card"><div class="form">
     <div><label>What is it for?</label><select id="ai_goal">${Object.keys(DRAFT_GOALS).map(k => `<option value="${k}" ${GOAL_BY_STAGE[c.stage] === k ? 'selected' : ''}>${DRAFT_GOALS[k]}</option>`).join('')}</select></div>
-    <div><label>Channel</label><select id="ai_channel"><option value="email" ${c.email || !c.phone ? 'selected' : ''}>Email</option><option value="whatsapp" ${!c.email && c.phone ? 'selected' : ''}>WhatsApp</option><option value="sms">SMS</option></select></div>
+    <div><label>Channel</label><select id="ai_channel"><option value="email" ${c.email || !c.phone ? 'selected' : ''}>Email</option><option value="whatsapp" ${!c.email && c.phone ? 'selected' : ''}>WhatsApp</option><option value="linkedin">LinkedIn</option><option value="sms">SMS</option></select></div>
     <div><label>Tone</label><select id="ai_tone">${Object.keys(TONES).map(k => `<option value="${k}">${TONES[k]}</option>`).join('')}</select></div>
     <div><label>Or start from a template</label><select id="ai_tpl" onchange="aiFromTemplate(this.value)"><option value="">-</option></select></div>
     <div class="full"><label>Anything to include? (optional)</label><input id="ai_extra" placeholder="e.g. mention the demo on Friday, offer a 10% discount"></div>
@@ -92,29 +92,35 @@ function renderDraftOut(d) {
   let out = $('#aiDraftOut');
   if (!out) { aiShowDraftForm(); out = $('#aiDraftOut'); }
   const wa = d.channel === 'whatsapp' || d.channel === 'sms';
+  const textOnly = wa || d.channel === 'linkedin';
   out.innerHTML = `<div style="margin-top:12px">
-    ${wa ? '' : `<label>Subject</label><input id="dr_subject" value="${esc(d.subject)}">`}
+    ${textOnly ? '' : `<label>Subject</label><input id="dr_subject" value="${esc(d.subject)}">`}
     <label style="margin-top:8px;display:block">Message (edit before using)</label><textarea id="dr_body" style="min-height:170px">${esc(d.body)}</textarea>
     <div class="note" style="margin-top:8px">AI drafts can be wrong. Check names, facts and any [bracketed] blanks before sending.</div>
     <div class="actions">
       <button class="btn small" onclick="copyText($('#dr_body').value)">Copy</button>
       ${d.channel === 'whatsapp' && c.phone ? `<button class="btn small" onclick="window.open('https://wa.me/'+'${esc(c.phone.replace(/\D/g, ''))}'+'?text='+encodeURIComponent($('#dr_body').value),'_blank')">Open in WhatsApp</button>` : ''}
-      ${!wa && c.email ? `<button class="btn small primary" onclick="aiSendEmail(this)">Send email now</button>` : ''}
+      ${d.channel === 'linkedin' && c.source && /linkedin\.com/i.test(c.source) ? `<a class="btn small" href="${esc(c.source)}" target="_blank" rel="noopener" onclick="logTouch('${c.id}','linkedin','LinkedIn message link opened')">Open LinkedIn</a>` : ''}
+      ${d.channel === 'email' && clientEmailAddresses(c).length && !c.optedOut ? `<button class="btn small primary" onclick="aiSendEmail(this)">Send email now</button>` : ''}
     </div></div>`;
 }
 
 async function aiSendEmail(btn) {
   const c = aiClient(); const subject = $('#dr_subject').value.trim(), body = $('#dr_body').value.trim();
+  const addresses = clientEmailAddresses(c);
+  const defaultEmail = addresses.find(email => email.toLowerCase() === String(c.email || '').toLowerCase()) || addresses[0];
+  const email = addresses.length > 1 ? prompt('Which saved email address should receive this message?', defaultEmail) : defaultEmail;
+  if (!email || !addresses.some(address => address.toLowerCase() === email.trim().toLowerCase())) return;
   if (!subject || !body) return toast('Subject and message are required');
   if (/\[[^\]]+\]/.test(body + subject) && !confirm('The message still contains [bracketed] blanks. Send anyway?')) return;
   if (c.stage === 'rejected' && !confirm(`${c.name} is in the Red Zone (said no). Send anyway?`)) return;
-  if (!confirm(`Send this email to ${c.email}?`)) return;
+  if (!confirm(`Send this email to ${email}?`)) return;
   btn.disabled = true;
   let r;
-  try { r = await api('/mail/send-one', 'POST', { clientId: c.id, subject, body }); }
+  try { r = await api('/mail/send-one', 'POST', { clientId: c.id, email, subject, body }); }
   catch (e) { btn.disabled = false; return toast(e.message); }
   btn.disabled = false;
-  toast(r.simulated ? 'Simulated send (SMTP not configured) - logged in activity' : 'Email sent');
+  toast(r.simulated ? `Simulated send to ${email} (SMTP not configured) - logged in activity` : `Email sent to ${email}`);
   await refresh(); openClient(c.id); renderNav();
 }
 
@@ -216,20 +222,22 @@ async function chatSend(text) {
 
 async function aiSettingsPanel() {
   const st = await api('/ai/status'); const s = settings;
-  const where = st.source === 'env' ? 'Using server environment key.' : st.source === 'settings' ? 'Using key saved in CRM settings.' : 'No Anthropic API key saved yet.';
+  const where = st.source === 'env' ? 'Using server environment key.' : st.source === 'settings' ? 'Using key saved in encrypted CRM settings.' : 'No provider API key saved yet.';
   return `<div class="panel">
     <h3>
       <span>⚙️ General &amp; AI Settings</span>
-      <span class="badge ${st.configured ? 'b-onboarded' : 'b-new'}">${st.configured ? 'Claude AI Ready' : 'AI Setup Needed'}</span>
+      <span class="badge ${st.configured ? 'b-onboarded' : 'b-new'}">${st.configured ? esc(st.provider) + ' AI Ready' : 'AI Setup Needed'}</span>
     </h3>
     <div class="form">
       <div><label>Company Name</label><input id="g_company" value="${esc(s.company)}"></div>
       <div><label>Currency Symbol</label><input id="g_cur" value="${esc(s.currency)}" maxlength="4"></div>
-      <div class="full"><label>Anthropic API Key (Claude AI)</label><input id="g_key" type="password" value="${esc(s.ai && s.ai.apiKey)}" placeholder="sk-ant-..." autocomplete="off"></div>
-      <div class="full"><label>Claude Model (leave blank for default: ${esc(st.model)})</label><input id="g_model" value="${esc(s.ai && s.ai.model)}" placeholder="${esc(st.model)}"></div>
+      <div><label>AI Provider</label><select id="g_provider"><option value="groq" ${(s.ai?.provider || 'groq') === 'groq' ? 'selected' : ''}>Groq (default)</option><option value="openai-compatible" ${s.ai?.provider === 'openai-compatible' ? 'selected' : ''}>OpenAI-compatible provider</option></select></div>
+      <div><label>AI API Key</label><input id="g_key" type="password" value="${esc(s.ai && s.ai.apiKey)}" placeholder="Paste provider API key" autocomplete="new-password"></div>
+      <div><label>Model (default: ${esc(st.model)})</label><input id="g_model" value="${esc(s.ai && s.ai.model)}" placeholder="${esc(st.model)}"></div>
+      <div><label>API Base URL (optional)</label><input id="g_baseUrl" value="${esc(s.ai?.baseUrl || '')}" placeholder="https://api.groq.com/openai/v1"></div>
     </div>
     <div style="background:var(--grey-bg);padding:10px 12px;border-radius:var(--radius-md);margin-top:12px;border:1px solid var(--line);font-size:12px;color:var(--muted);line-height:1.45">
-      <b>Status:</b> ${where} Get an API key at <a href="https://console.anthropic.com" target="_blank" rel="noopener" style="color:var(--blue)">console.anthropic.com</a>.
+      <b>Status:</b> ${where} Groq offers a rate-limited Free plan, but usage can be billed if the provider account is upgraded. Check the account tier before use. Model availability and limits can change; choose a model enabled for your account. Get a key at <a href="https://console.groq.com/keys" target="_blank" rel="noopener" style="color:var(--blue)">console.groq.com</a>. Other providers are used only when selected and configured here.
     </div>
     <div class="actions">
       <button class="btn" onclick="aiTest(this)">Test AI Connection</button>
@@ -238,7 +246,7 @@ async function aiSettingsPanel() {
   </div>`;
 }
 async function saveGeneral() {
-  await api('/settings', 'PUT', { company: $('#g_company').value, currency: $('#g_cur').value, ai: { apiKey: $('#g_key').value, model: $('#g_model').value } });
+  await api('/settings', 'PUT', { company: $('#g_company').value, currency: $('#g_cur').value, ai: { apiKey: $('#g_key').value, model: $('#g_model').value, provider: $('#g_provider').value, baseUrl: $('#g_baseUrl').value } });
   settings = await api('/settings');
   $('#brandName').textContent = (settings.company || 'Company') + ' CRM'; document.title = $('#brandName').textContent;
   toast('Saved'); renderSettings();

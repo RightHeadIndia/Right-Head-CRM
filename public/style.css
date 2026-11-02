@@ -441,6 +441,54 @@ a.btn.primary {
   align-items: center;
 }
 
+.client-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 34px);
+  gap: 6px;
+  justify-content: start;
+}
+
+.client-actions .icon-action {
+  display: inline-flex;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+
+.client-actions .icon-action svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.client-actions .action-brand-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 3px;
+  background: #0a66c2;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -0.7px;
+  line-height: 1;
+}
+
+.client-actions .icon-action:focus-visible {
+  outline: 3px solid var(--blue-border);
+  outline-offset: 2px;
+}
+
 /* Special button styles */
 a.btn.small[href*="wa.me"] {
   background: #ecfdf5;
@@ -776,6 +824,102 @@ td a:hover {
   height: 38px;
 }
 
+.mail-thread-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0;
+  color: var(--ink-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.mail-thread-option[hidden] {
+  display: none;
+}
+
+.mail-thread-option input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  padding: 0;
+  accent-color: var(--blue);
+}
+
+.mail-thread-notice {
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--blue-border);
+  border-radius: var(--radius-sm);
+  background: var(--blue-bg);
+  color: var(--blue-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mail-thread-notice:empty {
+  display: none;
+}
+
+.bulk-status-toolbar {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--blue-border);
+  border-radius: var(--radius-md);
+  background: var(--blue-bg);
+}
+
+.bulk-status-toolbar[hidden] {
+  display: none;
+}
+
+.bulk-selected-count {
+  align-self: center;
+  margin-right: auto;
+  color: var(--blue-text);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.bulk-field {
+  display: grid;
+  gap: 4px;
+  color: var(--ink-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.bulk-field select {
+  width: auto;
+  min-width: 175px;
+  height: 36px;
+  background: var(--card);
+  font-size: 12.5px;
+}
+
+.client-select-cell {
+  width: 42px;
+  min-width: 42px;
+  padding-right: 4px;
+  text-align: center;
+}
+
+.client-select-cell input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--blue);
+  vertical-align: middle;
+  cursor: pointer;
+}
+
 /* ==========================================================================
    Modals & Popups
    ========================================================================== */
@@ -911,6 +1055,65 @@ td a:hover {
 tr.done-row td {
   opacity: 0.55;
   text-decoration: line-through;
+}
+
+.mail-client-picker {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  margin: 8px 0 12px;
+}
+
+.mail-client-option {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.mail-client-option:last-child {
+  border-bottom: 0;
+}
+
+.mail-client-option:hover {
+  background: var(--grey-bg);
+}
+
+.mail-client-option > b,
+.mail-client-option > small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.mail-client-option > small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mail-client-addresses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 14px;
+  margin-top: 5px;
+}
+
+.mail-address-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.mail-address-option input {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.mail-address-option span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .p-high {
@@ -1235,3 +1438,47 @@ tr.done-row td {
     grid-template-columns: 1fr;
   }
 }
+
+/* Dark theme override. Components keep their existing markup and colors through tokens. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b1120;
+  --card: #111b2d;
+  --card-hover: #172338;
+  --ink: #e5edf8;
+  --ink-secondary: #c4d0e0;
+  --muted: #9aabc2;
+  --muted-light: #71839d;
+  --line: #29374d;
+  --line-subtle: #1b2940;
+  --blue-bg: #122d4e;
+  --blue-border: #244b77;
+  --blue-text: #93c5fd;
+  --green-bg: #12352e;
+  --green-border: #1e5b4b;
+  --green-text: #86efc3;
+  --red-bg: #3b2027;
+  --red-border: #71313d;
+  --red-text: #fda4af;
+  --amber-bg: #3a2e18;
+  --amber-border: #695020;
+  --amber-text: #fcd34d;
+  --purple-bg: #2b2148;
+  --purple-border: #493776;
+  --grey-bg: #172338;
+  --grey-border: #29374d;
+  --grey-text: #c4d0e0;
+  --side: #070c17;
+  --side-active: #18243a;
+  --shadow-xs: 0 1px 2px #0005;
+  --shadow-sm: 0 2px 8px #0005;
+  --shadow-md: 0 6px 16px #0005;
+  --shadow-lg: 0 10px 26px #0006;
+  --shadow-xl: 0 20px 40px #0007;
+}
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] textarea,
+:root[data-theme="dark"] select { background-color: #101a2b; color: var(--ink); border-color: var(--line); }
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder { color: var(--muted); }
+:root[data-theme="dark"] .msg.assistant { background: var(--grey-bg); }

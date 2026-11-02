@@ -1,6 +1,6 @@
 # Company CRM
 
-A CRM for a sales / outreach team: calling status, follow-up reminders, client replies, onboarding, red zone, mass mailing, tasks, a deals pipeline, reports, email templates, CSV/Excel import and export, and AI features powered by Claude. Production persistence uses Neon PostgreSQL through `DATABASE_URL`. Existing record payloads remain encrypted with AES-256-GCM.
+A CRM for a sales / outreach team: lead and communication statuses, calling, follow-up reminders, client replies, onboarding, red zone, mass mailing and automated sequences, tasks, deals, reports, templates, CSV/Excel import and export, and configurable AI. Production persistence uses Neon PostgreSQL through `DATABASE_URL`; the existing SQLite adapter remains for isolated compatibility tests. Existing record payloads and saved integration credentials remain encrypted with AES-256-GCM.
 
 ## Quick start
 
@@ -40,13 +40,21 @@ Production requires `DATABASE_URL` and does not fall back to SQLite. Explicit `C
 
 **Reminders.** Set "Next follow-up" on a client. It shows on the dashboard when due and the browser notifies you (checked every minute while the tab is open).
 
+**Email follow-ups.** A one-to-one email automatically continues the latest email conversation for the selected client address. Follow-ups are numbered from 1, keep the original subject with `Re:`, and use the saved message/thread headers; choose **Start a new email conversation** to reset the count. Mass mail offers an option to continue each recipient's latest thread, and automated sequence reminders stay in the thread after the initial email. Messages sent before thread tracking was added may not have a saved message ID, so their `Re:` subject may not be enough for every email provider to group them. Sending a follow-up does not mark a client as Replied/Blue; record an actual client response with **Client replied**.
+
+**Email sequences.** Mass Mailing can create an editable five-email sequence: an initial email on Day 1 followed by reminders on Days 3, 5, 7 and 9 (48 hours between emails). A sequence starts paused; select Start to activate it. Existing sequences on the prior schedule are migrated when the server next starts; active reminders retain their interval anchor, and paused sequences use the new schedule when resumed. After the final email, the CRM waits three days for a reply or onboarding; if neither is recorded, it moves the client to Red Zone and stops further follow-ups. A reply moves the client to Blue and stops the sequence; mark onboarded clients Green. The server scheduler continues while the browser is closed and resumes persisted schedules after a restart. Failures retry up to three times. Email replies must be logged with **Client replied**; automatic inbound email detection requires a separately configured mailbox/webhook integration.
+
+**Communication.** Click-to-call opens the device's phone app and logs an attempt; choose a call outcome to track it. Selecting **Call back** creates a high-priority task and reminder. WhatsApp links open the installed app; when Meta WhatsApp Cloud API credentials and a public webhook are configured in Settings, the CRM can send a message and record Meta delivery status. LinkedIn profile visits and drafted messages are recorded, while sending remains in LinkedIn because outbound messaging depends on LinkedIn's approved API permissions. A browser `tel:` link cannot choose the caller ID; use a configured phone or calling provider for that.
+
+**Themes.** Use the header toggle for Dark/Light mode. The choice is saved in CRM settings and in the current browser.
+
 **Tasks.** To-dos with due date, priority and an optional client; filter by open / due today / overdue / done.
 
 **Deals Pipeline.** Lead, Qualified, Proposal sent, Negotiation, Won, Lost. Drag cards between columns. Stage changes are logged on the client. Deleting a client keeps their deals (unlinked) so revenue history stays.
 
 **Reports.** 7 / 30 / 90 days or 12 months: response rate, conversion, pipeline, weighted forecast (weights in `DEAL_WEIGHT`, `lib/tools.js`), won revenue, win rate, calling outcomes, activity, sources, tasks.
 
-**Email Templates.** Save subject + message with `{{name}}` / `{{company}}`; load them in Mass Mailing or for one client.
+**Email Templates.** Save subject + message with `{{name}}` / `{{company}}`; load them in Mass Mailing or for one client. Outgoing emails automatically include the hosted Right Head logo beneath the message. Email clients that block external images may require the recipient to choose “Display images.”
 
 **Export.** CSV for clients, deals, tasks and the activity log (spreadsheet formulas are neutralised).
 
@@ -60,10 +68,12 @@ Settings & Import > choose a `.csv`, `.xlsx` or `.xls` file > Import. Row 1 must
 - When it finishes you get a summary: rows read, imported, skipped and why.
 
 ### Mass mailing and SMTP
-Settings & Import > Email (SMTP). Gmail: host `smtp.gmail.com`, port `587`, username = your Gmail address, password = an **App Password**. The host must be a server name (not an email address) and "From" looks like `Company <you@company.com>`. Until SMTP is configured, campaigns run in **simulation mode** (logged, nothing sent). Send only to people who agreed to hear from you and follow anti-spam law (India's DPDP Act, CAN-SPAM, GDPR). Gmail limits personal accounts to about 500 emails a day.
+Settings & Import > Email (SMTP). Gmail: host `smtp.gmail.com`, port `587`, username = your Gmail address, password = an **App Password**. The host must be a server name (not an email address) and "From" looks like `Company <you@company.com>`. Each client can have a primary email and additional addresses. In Mass Mailing, choose **Choose individual clients** to search clients across pipeline stages and select the exact email addresses to contact; **Select visible** chooses only each client's primary address. Red Zone and opted-out clients are excluded. You can send a one-time follow-up or create a sequence for the selected addresses. Until SMTP is configured, campaigns run in **simulation mode** (logged, nothing sent). Send only to people who agreed to hear from you and follow anti-spam law (India's DPDP Act, CAN-SPAM, GDPR). Gmail limits personal accounts to about 500 emails a day.
 
-## AI features (Claude)
-Settings & Import > General & AI > paste your Anthropic API key > Test AI connection. Or set `ANTHROPIC_API_KEY` on the server (recommended when hosting online). Optional `CLAUDE_MODEL`. Default model: `claude-sonnet-5-5`.
+Add a client's additional email addresses in the client editor, one per line. CSV/Excel imports can provide multiple addresses in the Email column (separated by commas, semicolons, or slashes) or use an `Email 2` / `Alternate Emails` column.
+
+## AI features (Groq by default)
+Settings & Import > General & AI > select Groq or an OpenAI-compatible provider, set a model and API key, then Test AI Connection. Groq uses `https://api.groq.com/openai/v1` by default; the default model is `openai/gpt-oss-20b`. Or set `GROQ_API_KEY` on the server. The Groq Free plan has rate limits; upgrading the provider account can incur usage charges. No AI API calls occur until a user clicks an AI feature. Configure other providers only when you choose to use them.
 
 | Where | What it does |
 |---|---|
@@ -73,11 +83,11 @@ Settings & Import > General & AI > paste your Anthropic API key > Test AI connec
 | Mass Mailing / Templates > Write with AI | 1-3 campaign versions |
 | AI Assistant page | Ask about clients, deals, tasks and results; it can create tasks and set reminders when asked, but cannot send, edit or delete |
 
-AI usage is billed by Anthropic. When you use an AI button, that client's details (name, company, contact info, notes, recent activity and messages) are sent to Anthropic; the assistant can read any client you ask about. Drafts can be wrong: check names, facts and any `[bracketed]` blanks before sending. The CRM has no automatic unsubscribe, so move anyone who asks to stop to the Red Zone. Client messages are treated as data, not instructions, and the server limits AI calls to 40 per minute.
+When you use an AI button, the required client details (name, company, contact info, notes, recent activity and messages) are sent to the selected provider; the assistant can read any client you ask about. Drafts can be wrong: check names, facts and any `[bracketed]` blanks before sending. Client messages are treated as data, not instructions, and the server limits AI calls to 40 per minute. Groq model availability and limits can change; choose a model enabled for your account.
 
 ## Security and backups
 - Sign-in uses one shared password (`APP_PASSWORD`, at least 12 characters). Sessions last 12 hours, use an HttpOnly SameSite cookie, and 5 wrong attempts lock the login for 15 minutes. It is meant for a small trusted team; there are no per-person accounts or audit trail yet.
-- Every record and setting is encrypted at rest with AES-256-GCM using `CRM_ENCRYPTION_KEY`, which is never stored in the database. An `ANTHROPIC_API_KEY` in the environment stays outside the database.
+- Every record and setting is encrypted at rest with AES-256-GCM using `CRM_ENCRYPTION_KEY`, which is never stored in the database. `GROQ_API_KEY` and other provider keys set in the environment stay outside the database; keys entered in Settings are encrypted with the CRM settings.
 - **Settings & Import > Download backup** regularly and store it securely. PostgreSQL mode exports a JSON backup of the CRM data; treat it as sensitive because the export contains decrypted record values. SQLite compatibility mode downloads an encrypted SQLite backup.
 - Behind an HTTPS reverse proxy set `CRM_TRUST_PROXY=1`. Never commit `.env`; `.gitignore` excludes it. Configure environment variables in Render rather than uploading `.env`.
 - If two people edit the same client at once, the later save gets a "changed by someone else" message instead of overwriting.
@@ -96,7 +106,7 @@ lib/database.js        SQLite compatibility adapter for tests
 lib/database-postgres.js Neon PostgreSQL adapter with encrypted records and version checks
 database/schema.sql    Repeatable Neon schema setup
 lib/tools.js           tasks, deals, templates, reports, CSV export
-lib/ai.js              Claude features
+lib/ai.js              Groq/OpenAI-compatible AI features
 public/index.html      app shell        public/login.*   sign-in page
 public/app.js          dashboard, clients, mass mail, settings, import
 public/tools.js        tasks, deals board, reports, templates pages

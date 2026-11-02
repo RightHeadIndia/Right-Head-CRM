@@ -21,7 +21,7 @@ test.before(async () => {
   const port = 20000 + Math.floor(Math.random() * 20000);
   base = `http://127.0.0.1:${port}`;
   proc = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT: String(port), APP_PASSWORD: PASSWORD, CRM_ENCRYPTION_KEY: crypto.randomBytes(32).toString('base64'), CRM_DB_FILE: path.join(dir, 'crm.sqlite'), ANTHROPIC_API_KEY: '' },
+    env: { ...process.env, PORT: String(port), APP_PASSWORD: PASSWORD, CRM_ENCRYPTION_KEY: crypto.randomBytes(32).toString('base64'), CRM_DB_FILE: path.join(dir, 'crm.sqlite'), GROQ_API_KEY: '', AI_API_KEY: '' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   await new Promise((resolve, reject) => {
@@ -52,14 +52,20 @@ test('Excel reader is served locally (CSP blocks CDNs)', async () => {
   const r = await call('GET', '/vendor/xlsx.full.min.js');
   assert.equal(r.status, 200);
   assert.ok(r.text.length > 100000);
+  const logo = await call('GET', '/Right%20head%20Logo.png');
+  assert.equal(logo.status, 200);
+  assert.match(logo.headers.get('content-type'), /image\/png/);
 });
 
 test('client create / validate / update', async () => {
   assert.equal((await call('POST', '/api/clients', { name: '' })).status, 400);
-  const c = await call('POST', '/api/clients', { name: 'Amit', email: 'amit@abc.com', phone: '9876543210' });
+  const c = await call('POST', '/api/clients', { name: 'Amit', email: 'amit@abc.com', alternateEmails: ['accounts@abc.com', 'amit@abc.com'], phone: '9876543210' });
   assert.equal(c.status, 200);
+  assert.deepEqual(c.json.alternateEmails, ['accounts@abc.com']);
+  assert.equal((await call('PUT', `/api/clients/${c.json.id}`, { alternateEmails: ['bad-address'] })).status, 400);
   const up = await call('PUT', '/api/clients/' + c.json.id, { callStatus: 'connected' });
   assert.equal(up.json.stage, 'contacted');
+  assert.deepEqual(up.json.alternateEmails, ['accounts@abc.com']);
 });
 
 test('import is forgiving, skips duplicates and says why', async () => {
@@ -77,6 +83,7 @@ test('import is forgiving, skips duplicates and says why', async () => {
   const all = (await call('GET', '/api/clients')).json;
   const abc = all.find(c => c.name === 'ABC Traders');
   assert.equal(abc.email, 'a@abc.com');
+  assert.deepEqual(abc.alternateEmails, ['sales@abc.com']);
   assert.match(abc.notes, /Email as written: a@abc.com \/ sales@abc.com/);
   assert.equal(all.find(c => c.name === 'Bad date').stage, 'new');
   const junk = all.find(c => c.name === 'Junk Contact Ltd');
@@ -142,6 +149,125 @@ test('mass mail runs in simulation mode and never mails the Red Zone', async () 
   assert.ok(!acts.some(a => a.type === 'mail'));
 });
 
+test('mass mail can target selected clients across stages but excludes Red Zone and opt-outs', async () => {
+  const contacted = await call('POST', '/api/clients', {
+    name: 'Selected Contacted',
+    email: 'selected-contacted@test.example',
+    alternateEmails: ['selected-alternate@test.example']
+  });
+  assert.equal((await call('PUT', `/api/clients/${contacted.json.id}`, { callStatus: 'connected' })).json.stage, 'contacted');
+  const rejected = await call('POST', '/api/clients', { name: 'Selected Red Zone', email: 'selected-red@test.example', stage: 'rejected' });
+  const optedOut = await call('POST', '/api/clients', { name: 'Selected Opt Out', email: 'selected-optout@test.example' });
+  await call('POST', `/api/clients/${optedOut.json.id}/activity`, { type: 'reply', note: 'Please unsubscribe me and do not contact me again.' });
+
+  const r = await call('POST', '/api/mail/send', {
+    audience: 'selected',
+    recipients: [
+      { clientId: contacted.json.id, email: 'selected-alternate@test.example' },
+      { clientId: rejected.json.id, email: 'selected-red@test.example' },
+      { clientId: optedOut.json.id, email: 'selected-optout@test.example' }
+    ],
+    subject: 'Following up, {{name}}',
+    body: 'Hello {{name}}'
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.audience, 'selected');
+  assert.equal(r.json.total, 1);
+  assert.equal(r.json.sent, 1);
+  const massMailClient = (await call('GET', '/api/clients')).json.find(c => c.id === contacted.json.id);
+  const massMailFollowUpHours = (new Date(massMailClient.followUp).getTime() - Date.now()) / 3600000;
+  assert.ok(Math.abs(massMailFollowUpHours - 48) < 0.02, 'mass mail follow-up is scheduled 48 hours after sending');
+  const firstMailThread = await call('GET', `/api/mail/thread?clientId=${contacted.json.id}&email=selected-alternate%40test.example`);
+  assert.equal(firstMailThread.status, 200);
+  assert.equal(firstMailThread.json.hasHistory, true);
+  assert.equal(firstMailThread.json.nextFollowUpNumber, 1, 'first reminder is automatically numbered 1');
+  assert.equal(firstMailThread.json.threadSubject, 'Following up, Selected Contacted');
+  const primaryMailThread = await call('GET', `/api/mail/thread?clientId=${contacted.json.id}&email=selected-contacted%40test.example`);
+  assert.equal(primaryMailThread.json.hasHistory, false, 'follow-up history is isolated per email address');
+  assert.equal((await call('POST', '/api/mail/send', {
+    audience: 'selected',
+    recipients: [{ clientId: contacted.json.id, email: 'not-saved@test.example' }],
+    subject: 'Follow-up',
+    body: 'Hello'
+  })).status, 400);
+  const singleAlternate = await call('POST', '/api/mail/send-one', {
+    clientId: contacted.json.id,
+    email: 'selected-alternate@test.example',
+    subject: 'One-to-one follow-up',
+    body: 'Hello {{email}}'
+  });
+  assert.equal(singleAlternate.status, 200);
+  assert.equal(singleAlternate.json.email, 'selected-alternate@test.example');
+  assert.equal(singleAlternate.json.isFollowUp, true);
+  assert.equal(singleAlternate.json.followUpNumber, 1);
+  let mailActivities = (await call('GET', `/api/clients/${contacted.json.id}/activities`)).json.filter(a => a.type === 'mail');
+  assert.match(mailActivities[0].emailSubject, /^Re: Following up, Selected Contacted$/);
+  assert.equal(mailActivities[0].isFollowUp, true);
+  assert.equal(mailActivities[0].followUpNumber, 1);
+  const secondFollowUp = await call('POST', '/api/mail/send', {
+    audience: 'selected',
+    recipients: [{ clientId: contacted.json.id, email: 'selected-alternate@test.example' }],
+    subject: 'Another subject (thread subject stays unchanged)',
+    body: 'Second reminder',
+    replyToLast: true
+  });
+  assert.equal(secondFollowUp.status, 200);
+  assert.equal(secondFollowUp.json.sent, 1);
+  mailActivities = (await call('GET', `/api/clients/${contacted.json.id}/activities`)).json.filter(a => a.type === 'mail');
+  assert.match(mailActivities[0].emailSubject, /^Re: Following up, Selected Contacted$/);
+  assert.equal(mailActivities[0].followUpNumber, 2);
+  assert.equal(mailActivities[0].isFollowUp, true);
+
+  const freshThread = await call('POST', '/api/mail/send-one', {
+    clientId: contacted.json.id,
+    email: 'selected-alternate@test.example',
+    subject: 'A new topic',
+    body: 'A new conversation',
+    replyToLast: false
+  });
+  assert.equal(freshThread.status, 200);
+  assert.equal(freshThread.json.isFollowUp, false, 'a new conversation starts a fresh reminder count');
+  const newThread = await call('GET', `/api/mail/thread?clientId=${contacted.json.id}&email=selected-alternate%40test.example`);
+  assert.equal(newThread.json.nextFollowUpNumber, 1);
+  assert.equal(newThread.json.threadSubject, 'A new topic');
+  const singleMailClient = (await call('GET', '/api/clients')).json.find(c => c.id === contacted.json.id);
+  const singleMailFollowUpHours = (new Date(singleMailClient.followUp).getTime() - Date.now()) / 3600000;
+  assert.ok(Math.abs(singleMailFollowUpHours - 48) < 0.02, 'single email follow-up is scheduled 48 hours after sending');
+  assert.equal((await call('POST', '/api/mail/send-one', {
+    clientId: contacted.json.id,
+    email: 'not-saved@test.example',
+    subject: 'Follow-up',
+    body: 'Hello'
+  })).status, 400);
+
+  const contactedActivities = (await call('GET', `/api/clients/${contacted.json.id}/activities`)).json;
+  const rejectedActivities = (await call('GET', `/api/clients/${rejected.json.id}/activities`)).json;
+  const optedOutActivities = (await call('GET', `/api/clients/${optedOut.json.id}/activities`)).json;
+  assert.ok(contactedActivities.some(a => a.type === 'mail'));
+  assert.ok(!rejectedActivities.some(a => a.type === 'mail'));
+  assert.ok(!optedOutActivities.some(a => a.type === 'mail'));
+
+  const steps = [1, 3, 5, 7, 9].map(day => ({ day, subject: `Follow-up ${day}`, body: `Hello {{name}}` }));
+  const sequence = await call('POST', '/api/sequences', {
+    audience: 'selected',
+    recipients: [{ clientId: contacted.json.id, email: 'selected-alternate@test.example' }],
+    steps
+  });
+  assert.equal(sequence.status, 200);
+  assert.equal(sequence.json.total, 1);
+  assert.deepEqual(sequence.json.finalOutcome, { action: 'move_to_red_zone_if_no_reply', waitDays: 3 });
+  assert.equal(sequence.json.recipients[0].clientId, contacted.json.id);
+  assert.equal(sequence.json.recipients[0].email, 'selected-alternate@test.example');
+
+  const noneEligible = await call('POST', '/api/mail/send', {
+    audience: 'selected',
+    clientIds: [rejected.json.id, optedOut.json.id],
+    subject: 'Follow-up',
+    body: 'Hello'
+  });
+  assert.equal(noneEligible.status, 400);
+});
+
 test('AI endpoints explain what is missing instead of crashing', async () => {
   const s = await call('GET', '/api/ai/status');
   assert.equal(s.json.configured, false);
@@ -149,6 +275,82 @@ test('AI endpoints explain what is missing instead of crashing', async () => {
   const r = await call('POST', '/api/ai/summary', { clientId: any.id });
   assert.equal(r.status, 400);
   assert.equal(r.json.code, 'no_key');
+});
+
+test('communication opt-out blocks email and callback outcomes create a reminder task', async () => {
+  const c = await call('POST', '/api/clients', { name: 'Callback Test', email: 'callback@test.example', phone: '919876543210' });
+  assert.equal(c.status, 200);
+  const markedContacted = await call('PUT', '/api/clients/' + c.json.id, { communicationStatus: 'contacted' });
+  assert.equal(markedContacted.json.communicationStatus, 'contacted');
+  assert.equal((await call('GET', '/api/clients')).json.find(x => x.id === c.json.id).communicationStatus, 'contacted', 'communication status persists across list reloads');
+  const callback = await call('PUT', '/api/clients/' + c.json.id, { callStatus: 'callback' });
+  assert.equal(callback.json.callStatus, 'callback');
+  assert.ok(callback.json.followUp, 'callback sets a reminder date');
+  const tasks = (await call('GET', '/api/tasks')).json;
+  assert.ok(tasks.some(t => t.clientId === c.json.id && /Call back/.test(t.title) && !t.done));
+  const reply = await call('POST', '/api/clients/' + c.json.id + '/activity', { type: 'reply', note: 'Please unsubscribe me and do not contact me again.' });
+  assert.equal(reply.json.optedOut, true);
+  assert.equal(reply.json.communicationStatus, 'opted_out');
+  assert.equal((await call('POST', '/api/mail/send-one', { clientId: c.json.id })).status, 409);
+});
+
+test('follow-up sequences support controls, edits, and stop on a reply or replied stage', async () => {
+  const lead = await call('POST', '/api/clients', { name: 'Sequence Test', email: 'sequence@test.example' });
+  const steps = [1, 3, 5, 7, 9].map(day => ({ day, subject: `Day ${day} for {{name}}`, body: `Hello {{name}}, this is day ${day}.` }));
+  const created = await call('POST', '/api/sequences', { audience: 'new', clientIds: [lead.json.id], steps });
+  assert.equal(created.status, 200);
+  assert.equal(created.json.status, 'paused');
+  assert.deepEqual(created.json.steps.map(step => step.day), [1, 3, 5, 7, 9]);
+  const startedAt = Date.now();
+  let action = await call('POST', `/api/campaigns/${created.json.id}/action`, { action: 'start' });
+  assert.equal(action.json.status, 'active');
+  const firstStepDelay = Date.parse(action.json.recipients[0].runAt) - startedAt;
+  assert.ok(firstStepDelay >= 23 * 60 * 60 * 1000 && firstStepDelay <= 25 * 60 * 60 * 1000, 'initial email is scheduled for Day 1');
+  action = await call('POST', `/api/campaigns/${created.json.id}/action`, { action: 'pause' });
+  assert.equal(action.json.status, 'paused');
+  steps[0].subject = 'Edited Day 1 for {{name}}';
+  action = await call('POST', `/api/campaigns/${created.json.id}/action`, { action: 'edit', steps });
+  assert.equal(action.json.steps[0].subject, steps[0].subject);
+  await call('POST', `/api/campaigns/${created.json.id}/action`, { action: 'resume' });
+  const stageReply = await call('PUT', `/api/clients/${lead.json.id}`, { stage: 'replied' });
+  assert.equal(stageReply.json.communicationStatus, 'replied');
+  let campaign = (await call('GET', '/api/campaigns')).json.find(c => c.id === created.json.id);
+  assert.equal(campaign.recipients[0].status, 'stopped', 'moving to Replied stops remaining sequence emails');
+  const reply = await call('POST', '/api/clients/' + lead.json.id + '/activity', { type: 'reply', note: 'I am interested.' });
+  assert.equal(reply.status, 200);
+  campaign = (await call('GET', '/api/campaigns')).json.find(c => c.id === created.json.id);
+  assert.equal(campaign.status, 'complete');
+  assert.equal(campaign.recipients[0].status, 'stopped');
+});
+
+test('WhatsApp credentials are masked and signed inbound webhook replies are recorded', async () => {
+  const secret = 'test-meta-app-secret';
+  await call('PUT', '/api/settings', { theme: 'dark', whatsapp: { accessToken: 'private-token', phoneNumberId: '123456789', apiVersion: 'v21.0', verifyToken: 'verify-me', appSecret: secret } });
+  const settings = (await call('GET', '/api/settings')).json;
+  assert.equal(settings.theme, 'dark');
+  assert.equal(settings.whatsapp.accessToken, '********');
+  assert.equal(settings.whatsapp.appSecret, '********');
+  assert.equal((await call('GET', '/api/whatsapp/status')).json.configured, true);
+  const lead = await call('POST', '/api/clients', { name: 'WhatsApp Test', phone: '919999111222', email: 'wa@test.example' });
+  const verify = await call('GET', '/api/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=verify-me&hub.challenge=challenge-value');
+  assert.equal(verify.text, 'challenge-value');
+  const raw = JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: '919999111222', text: { body: 'STOP' } }] } }] }] });
+  const signature = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  const event = await fetch(base + '/api/webhooks/whatsapp', { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': signature }, body: raw });
+  assert.equal(event.status, 200);
+  const updated = (await call('GET', '/api/clients')).json.find(c => c.id === lead.json.id);
+  assert.equal(updated.optedOut, true);
+  assert.equal(updated.stage, 'replied');
+});
+
+test('AI settings retain the Groq default and mask provider keys', async () => {
+  await call('PUT', '/api/settings', { ai: { provider: 'groq', model: 'openai/gpt-oss-20b', apiKey: 'test-provider-key' } });
+  const settings = (await call('GET', '/api/settings')).json;
+  assert.equal(settings.ai.provider, 'groq');
+  assert.equal(settings.ai.apiKey, '********');
+  const status = (await call('GET', '/api/ai/status')).json;
+  assert.equal(status.provider, 'groq');
+  await call('PUT', '/api/settings', { ai: { apiKey: '' } });
 });
 
 test('backup downloads a SQLite file', async () => {
