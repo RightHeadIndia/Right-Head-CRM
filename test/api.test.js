@@ -66,6 +66,25 @@ test('client create / validate / update', async () => {
   const up = await call('PUT', '/api/clients/' + c.json.id, { callStatus: 'connected' });
   assert.equal(up.json.stage, 'contacted');
   assert.deepEqual(up.json.alternateEmails, ['accounts@abc.com']);
+  const history = await call('GET', `/api/history?type=records&q=${encodeURIComponent(c.json.name)}`);
+  assert.equal(history.status, 200);
+  const added = history.json.activities.find(activity => activity.type === 'created');
+  const updated = history.json.activities.find(activity => activity.type === 'record');
+  assert.ok(added.details.changes.some(change => change.field === 'name' && change.after === c.json.name));
+  assert.ok(updated.details.changes.some(change => change.field === 'callStatus' && change.before === 'not_called' && change.after === 'connected'));
+  assert.ok(updated.details.changes.some(change => change.field === 'stage' && change.before === 'new' && change.after === 'contacted'));
+});
+
+test('dashboard and report stage and call counts cover all client records', async () => {
+  const dashboard = await call('GET', '/api/dashboard');
+  assert.equal(dashboard.status, 200);
+  assert.equal(Object.values(dashboard.json.stages).reduce((sum, count) => sum + count, 0), dashboard.json.total);
+  assert.equal(Object.values(dashboard.json.calls).reduce((sum, count) => sum + count, 0), dashboard.json.total);
+
+  const report = await call('GET', '/api/reports?days=30');
+  assert.equal(report.status, 200);
+  assert.equal(Object.values(report.json.clients.stages).reduce((sum, count) => sum + count, 0), report.json.clients.total);
+  assert.equal(Object.values(report.json.clients.calls).reduce((sum, count) => sum + count, 0), report.json.clients.total);
 });
 
 test('import is forgiving, skips duplicates and says why', async () => {
@@ -133,6 +152,8 @@ test('tasks, deals, templates, reports, exports', async () => {
   assert.equal((await call('GET', '/api/export/hack')).status, 404);
   const del = await call('DELETE', '/api/clients/' + amit.id);
   assert.equal(del.status, 200);
+  const history = await call('GET', `/api/history?type=records&q=${encodeURIComponent(amit.name)}`);
+  assert.ok(history.json.activities.some(activity => activity.type === 'deleted' && activity.clientName === amit.name), 'deleted client history remains accessible');
   assert.equal((await call('GET', '/api/tasks')).json.length, 0, 'tasks of a deleted client are removed');
   assert.equal((await call('GET', '/api/deals')).json[0].clientId, '', 'deals are kept but unlinked');
 });
@@ -247,7 +268,7 @@ test('mass mail can target selected clients across stages but excludes Red Zone 
   assert.ok(!rejectedActivities.some(a => a.type === 'mail'));
   assert.ok(!optedOutActivities.some(a => a.type === 'mail'));
 
-  const steps = [1, 3, 5, 7, 9].map(day => ({ day, subject: `Follow-up ${day}`, body: `Hello {{name}}` }));
+  const steps = [0, 2, 4, 6, 8].map(day => ({ day, subject: `Follow-up ${day}`, body: `Hello {{name}}` }));
   const sequence = await call('POST', '/api/sequences', {
     audience: 'selected',
     recipients: [{ clientId: contacted.json.id, email: 'selected-alternate@test.example' }],
@@ -296,19 +317,19 @@ test('communication opt-out blocks email and callback outcomes create a reminder
 
 test('follow-up sequences support controls, edits, and stop on a reply or replied stage', async () => {
   const lead = await call('POST', '/api/clients', { name: 'Sequence Test', email: 'sequence@test.example' });
-  const steps = [1, 3, 5, 7, 9].map(day => ({ day, subject: `Day ${day} for {{name}}`, body: `Hello {{name}}, this is day ${day}.` }));
+  const steps = [0, 2, 4, 6, 8].map(day => ({ day, subject: `Day ${day} for {{name}}`, body: `Hello {{name}}, this is day ${day}.` }));
   const created = await call('POST', '/api/sequences', { audience: 'new', clientIds: [lead.json.id], steps });
   assert.equal(created.status, 200);
   assert.equal(created.json.status, 'paused');
-  assert.deepEqual(created.json.steps.map(step => step.day), [1, 3, 5, 7, 9]);
+  assert.deepEqual(created.json.steps.map(step => step.day), [0, 2, 4, 6, 8]);
   const startedAt = Date.now();
   let action = await call('POST', `/api/campaigns/${created.json.id}/action`, { action: 'start' });
   assert.equal(action.json.status, 'active');
   const firstStepDelay = Date.parse(action.json.recipients[0].runAt) - startedAt;
-  assert.ok(firstStepDelay >= 23 * 60 * 60 * 1000 && firstStepDelay <= 25 * 60 * 60 * 1000, 'initial email is scheduled for Day 1');
+  assert.ok(firstStepDelay >= 0 && firstStepDelay < 5000, 'initial email is due immediately');
   action = await call('POST', `/api/campaigns/${created.json.id}/action`, { action: 'pause' });
   assert.equal(action.json.status, 'paused');
-  steps[0].subject = 'Edited Day 1 for {{name}}';
+  steps[0].subject = 'Edited initial email for {{name}}';
   action = await call('POST', `/api/campaigns/${created.json.id}/action`, { action: 'edit', steps });
   assert.equal(action.json.steps[0].subject, steps[0].subject);
   await call('POST', `/api/campaigns/${created.json.id}/action`, { action: 'resume' });

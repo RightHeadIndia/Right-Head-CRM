@@ -173,7 +173,7 @@ async function renderReports() {
   <div class="grid stats">
     <div class="stat"><b>${c.created}</b><span>New clients (period)</span></div>
     <div class="stat blue"><b>${pct(c.responseRate)}</b><span>Response rate (replied or onboarded / contacted)</span></div>
-    <div class="stat green"><b>${pct(c.conversionRate)}</b><span>Onboarded / all clients</span></div>
+    <div class="stat green"><b>${c.stages.onboarded}</b><span>Currently onboarded · ${pct(c.conversionRate)} of all clients</span></div>
     <div class="stat amber"><b>${money(d.openValue)}</b><span>Open pipeline (${d.openCount} deals)</span></div>
     <div class="stat"><b>${money(d.weightedForecast)}</b><span>Weighted forecast</span></div>
     <div class="stat green"><b>${money(d.wonValue)}</b><span>Won in period (${d.wonCount})</span></div>
@@ -183,8 +183,8 @@ async function renderReports() {
     <div class="stat amber"><b>${r.campaigns?.sequencesActive || 0}</b><span>Active follow-up sequences</span></div>
   </div>
   <div class="grid cols">
-    <div class="panel"><h3>Client funnel (now)</h3>${Object.keys(STAGES).map(k => barRow(STAGES[k].split(' ')[0] === 'Said' ? 'Said No' : STAGES[k].split(' ')[0], c.stages[k], stageMax)).join('')}
-      <div class="empty">In this period: ${c.onboardedInRange} onboarded, ${c.rejectedInRange} said no (from logged stage changes).</div></div>
+    <div class="panel"><h3>Client funnel (current)</h3>${Object.keys(STAGES).map(k => barRow(STAGES[k].split(' ')[0] === 'Said' ? 'Said No' : STAGES[k].split(' ')[0], c.stages[k], stageMax)).join('')}
+      <div class="empty">During the selected period: ${c.onboardedInRange} moved to Onboarded and ${c.rejectedInRange} moved to Said No.</div></div>
     <div class="panel"><h3>Calling outcomes (now)</h3>${Object.keys(CALLS).map(k => barRow(CALLS[k], c.calls[k], callMax)).join('')}</div>
     <div class="panel"><h3>Team activity (period)</h3>
       ${[['call', 'Call updates'], ['reply', 'Client replies'], ['mail', 'Emails sent'], ['note', 'Notes'], ['stage', 'Stage changes'], ['task', 'Task events'], ['deal', 'Deal events']].map(([k, l]) => barRow(l, a[k], Math.max(1, ...Object.values(a)))).join('')}</div>
@@ -196,8 +196,8 @@ async function renderReports() {
       ${d.overdueOpen ? `<div class="empty late">${d.overdueOpen} open deal(s) are past their expected close date.</div>` : ''}</div>
     <div class="panel green"><h3>Won revenue, last 6 months</h3>${d.months.map(m => barRow(m.month, m.value, monthMax, `${money(m.value)} <small style="color:var(--muted)">(${m.won})</small>`)).join('')}
       <div class="empty">Average won deal in period: ${money(d.avgWon)}</div></div>
-    <div class="panel"><h3>Lead sources</h3>
-      ${c.sources.length ? `<table style="font-size:13px"><thead><tr><th>Source</th><th>Clients</th><th>Onboarded</th></tr></thead><tbody>${c.sources.map(s => `<tr><td>${esc(s.source)}</td><td>${s.clients}</td><td>${s.onboarded}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No data.</div>'}</div>
+    <div class="panel report-sources"><h3>Lead sources</h3>
+      ${c.sources.length ? `<table class="lead-sources-table"><thead><tr><th scope="col">Source</th><th scope="col">Clients</th><th scope="col">Onboarded</th></tr></thead><tbody>${c.sources.map(s => `<tr><td class="lead-source-name">${esc(s.source)}</td><td>${s.clients}</td><td>${s.onboarded}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No data.</div>'}</div>
   </div>
   <p class="empty" style="margin-top:14px">Weighted forecast uses: Lead 10%, Qualified 25%, Proposal 50%, Negotiation 75% (edit <code>DEAL_WEIGHT</code> in lib/tools.js).</p>`;
 }

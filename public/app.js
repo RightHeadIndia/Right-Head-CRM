@@ -17,7 +17,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': 
 const STAGES = { new: 'New', contacted: 'Contacted', replied: 'Replied (Blue)', onboarded: 'Onboarded (Green)', rejected: 'Said No (Red)' };
 const CALLS = { not_called: 'Not called', connected: 'Connected', no_answer: 'No answer', busy: 'Busy', callback: 'Call back' };
 const COMMUNICATION = { not_contacted: 'Not contacted', contacted: 'Contacted', replied: 'Replied', opted_out: 'Opted out' };
-const badge = s => `<span class="badge b-${s}">${STAGES[s].split(' ')[0] === 'Said' ? 'Said No' : STAGES[s].split(' ')[0]}</span>`;
+const badge = s => { const stage = Object.hasOwn(STAGES, s) ? s : 'new'; return `<span class="badge b-${stage}">${STAGES[stage].split(' ')[0] === 'Said' ? 'Said No' : STAGES[stage].split(' ')[0]}</span>`; };
 const CLIENT_ACTION_ICONS = {
   open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>',
   delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
@@ -60,6 +60,7 @@ const PAGES = {
   tasks: { title: 'Tasks', icon: '&#9745;' },
   deals: { title: 'Deals Pipeline', icon: '&#36;' },
   reports: { title: 'Reports', icon: '&#9636;' },
+  history: { title: 'History', icon: '&#8635;' },
   mail: { title: 'Mass Mailing', icon: '&#9993;' },
   templates: { title: 'Email Templates', icon: '&#9998;' },
   assistant: { title: 'AI Assistant', icon: '&#10024;' },
@@ -83,7 +84,7 @@ function renderNav() {
   $('#nav').innerHTML = `<div class="sep">Overview</div>${item('dashboard')}
     <div class="sep">Pipeline</div>${item('clients')}${item('calls')}${item('followups')}
     <div class="sep">Zones</div>${item('replied')}${item('onboarded')}${item('redzone')}
-    <div class="sep">Sales tools</div>${item('tasks')}${item('deals')}${item('reports')}
+    <div class="sep">Sales tools</div>${item('tasks')}${item('deals')}${item('reports')}${item('history')}
     <div class="sep">Outreach</div>${item('mail')}${item('templates')}
     <div class="sep">AI</div>${item('assistant')}
     <div class="sep">System</div>${item('settings')}`;
@@ -110,6 +111,7 @@ async function render() {
   if (page === 'tasks') return renderTasks();
   if (page === 'deals') return renderDeals();
   if (page === 'reports') return renderReports();
+  if (page === 'history') return renderHistory();
   if (page === 'templates') return renderTemplates();
   if (page === 'assistant') return renderAssistant();
   if (page === 'settings') return renderSettings();
@@ -168,26 +170,38 @@ function renderList() {
   rows.sort(cfg.sort || ((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
   const stageFilter = page === 'clients' || page === 'calls'
     ? `<select id="stageF" onchange="renderList()"><option value="">All stages</option>${Object.keys(STAGES).map(k => `<option value="${k}" ${$('#stageF')?.value === k ? 'selected' : ''}>${STAGES[k]}</option>`).join('')}</select>` : '';
-  if ($('#stageF') && $('#stageF').value) rows = rows.filter(c => c.stage === $('#stageF').value);
+  if ($('#stageF') && $('#stageF').value) rows = rows.filter(c => (Object.hasOwn(STAGES, c.stage) ? c.stage : 'new') === $('#stageF').value);
   const total = rows.length;
   rows = rows.slice(0, listLimit);
   renderedClientIds = rows.map(client => client.id);
   $('#view').innerHTML = `<div class="toolbar">${stageFilter}<span style="color:var(--muted)">${total} record(s)</span>${page === 'clients' ? `<button class="btn" onclick="go('settings')">&#128229; Import clients</button>` + exportBtn('clients') : ''}</div>
   <div class="bulk-status-toolbar" id="bulkStatusToolbar" hidden>
     <span class="bulk-selected-count" id="bulkSelectedCount"></span>
+    <span class="bulk-note">Same values apply to every selected record. Blank fields stay unchanged.</span>
     <label class="bulk-field">Stage<select id="bulkStage"><option value="">Keep current</option>${Object.entries(STAGES).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
     <label class="bulk-field">Communication<select id="bulkCommunication"><option value="">Keep current</option>${Object.entries(COMMUNICATION).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
-    <button class="btn primary" id="bulkApplyButton" onclick="applyBulkClientStatus()">Apply to selected</button>
-    <button class="btn" onclick="clearClientSelection()">Clear selection</button>
+    <label class="bulk-field">Call status<select id="bulkCall"><option value="">Keep current</option>${Object.entries(CALLS).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
+    <label class="bulk-field">Follow-up<input id="bulkFollowUp" type="datetime-local"></label>
+    <label class="bulk-clear"><input id="bulkClearFollowUp" type="checkbox"> Clear follow-up</label>
+    <label class="bulk-field">Location<input id="bulkLocation" maxlength="200" placeholder="Leave blank to keep"></label>
+    <label class="bulk-clear"><input id="bulkClearLocation" type="checkbox"> Clear location</label>
+    <label class="bulk-field">Source / link<input id="bulkSource" maxlength="500" placeholder="Leave blank to keep"></label>
+    <label class="bulk-clear"><input id="bulkClearSource" type="checkbox"> Clear source</label>
+    <label class="bulk-field bulk-notes">Notes<textarea id="bulkNotes" maxlength="6000" rows="2" placeholder="Leave blank to keep"></textarea></label>
+    <label class="bulk-clear"><input id="bulkClearNotes" type="checkbox"> Clear notes</label>
+    <div class="bulk-actions">
+      <button class="btn primary" id="bulkApplyButton" onclick="applyBulkClientStatus()">Apply to selected</button>
+      <button class="btn" onclick="clearClientSelection()">Clear selection</button>
+    </div>
   </div>
   <div class="table-wrap"><table><thead><tr><th class="client-select-cell"><input id="selectVisibleClients" type="checkbox" aria-label="Select all visible clients" title="Select all visible clients" onchange="toggleVisibleClientSelection(this.checked)"></th><th>Client</th><th>Contact</th><th>Sales stage</th><th>Communication</th><th>Call outcome</th><th>Next follow-up</th><th>Actions</th></tr></thead><tbody>
-  ${rows.map(c => `<tr class="row-${c.stage}">
+  ${rows.map(c => `<tr class="row-${Object.hasOwn(STAGES, c.stage) ? c.stage : 'new'}">
     <td class="client-select-cell"><input class="client-row-select" type="checkbox" value="${esc(c.id)}" aria-label="Select ${esc(c.name)}" ${selectedClientIds.has(c.id) ? 'checked' : ''} onchange="toggleClientSelection('${c.id}',this.checked)"></td>
     <td><b>${esc(c.name)}</b><br><small style="color:var(--muted)">${esc(c.company)}${c.location ? ' · ' + esc(c.location) : ''}</small></td>
     <td>${c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a><br>` : ''}<small>${esc(c.email)}${c.alternateEmails?.length ? ` (+${c.alternateEmails.length} additional)` : ''}</small></td>
     <td>${badge(c.stage)}</td>
     <td><select onchange="quick('${c.id}',{communicationStatus:this.value})">${Object.keys(COMMUNICATION).map(k => `<option value="${k}" ${(c.communicationStatus || 'not_contacted') === k ? 'selected' : ''}>${COMMUNICATION[k]}</option>`).join('')}</select></td>
-    <td><select onchange="quick('${c.id}',{callStatus:this.value})">${Object.keys(CALLS).map(k => `<option value="${k}" ${c.callStatus === k ? 'selected' : ''}>${CALLS[k]}</option>`).join('')}</select></td>
+    <td><select onchange="quick('${c.id}',{callStatus:this.value})">${Object.keys(CALLS).map(k => `<option value="${k}" ${(c.callStatus || 'not_called') === k ? 'selected' : ''}>${CALLS[k]}</option>`).join('')}</select></td>
     <td class="${isLate(c.followUp) ? 'late' : ''}">${fmt(c.followUp)}</td>
     <td class="client-actions-cell"><div class="client-actions">
       <button class="btn small icon-action" onclick="openClient('${c.id}')" title="Open" aria-label="Open">${CLIENT_ACTION_ICONS.open}</button>
@@ -232,10 +246,25 @@ async function applyBulkClientStatus() {
   const ids = [...selectedClientIds];
   const stage = $('#bulkStage')?.value || '';
   const communicationStatus = $('#bulkCommunication')?.value || '';
+  const callStatus = $('#bulkCall')?.value || '';
+  const followUpInput = $('#bulkFollowUp')?.value || '';
+  const location = $('#bulkLocation')?.value.trim() || '';
+  const source = $('#bulkSource')?.value.trim() || '';
+  const notes = $('#bulkNotes')?.value || '';
   const patch = {};
   if (stage) patch.stage = stage;
   if (communicationStatus) patch.communicationStatus = communicationStatus;
-  if (!ids.length || !Object.keys(patch).length) return toast('Choose a stage or communication status to apply.');
+  if (callStatus) patch.callStatus = callStatus;
+  if (followUpInput) patch.followUp = new Date(followUpInput).toISOString();
+  if ($('#bulkClearFollowUp')?.checked) patch.followUp = '';
+  if (location) patch.location = location;
+  if ($('#bulkClearLocation')?.checked) patch.location = '';
+  if (source) patch.source = source;
+  if ($('#bulkClearSource')?.checked) patch.source = '';
+  if (notes.trim()) patch.notes = notes;
+  if ($('#bulkClearNotes')?.checked) patch.notes = '';
+  if (!ids.length || !Object.keys(patch).length) return toast('Choose at least one field to update.');
+  if (!confirm(`Apply these changes to ${ids.length} selected client(s)?`)) return;
 
   const button = $('#bulkApplyButton');
   if (button) button.disabled = true;
@@ -270,7 +299,7 @@ $('#search').addEventListener('input', () => {
   clearTimeout(searchTimer); // wait for a pause in typing before redrawing
   searchTimer = setTimeout(() => {
     listLimit = 200;
-    if (page === 'tasks') renderTasks(); else if (page === 'deals') renderDeals();
+    if (page === 'tasks') renderTasks(); else if (page === 'deals') renderDeals(); else if (page === 'history') renderHistory();
     else if (!['dashboard', 'mail', 'settings', 'reports', 'templates', 'assistant'].includes(page)) renderList();
   }, 150);
 });
@@ -287,6 +316,44 @@ async function quick(id, patch) {
     toast(error.message || 'Could not save this change');
     await refresh(); render();
   }
+}
+let historyType = 'records';
+let historyLimit = 100;
+function historyValue(value) {
+  if (Array.isArray(value)) return value.join(', ') || '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return value === '' || value === null || value === undefined ? '—' : String(value);
+}
+function historyEventName(type) {
+  return ({ created: 'Record added', record: 'Record updated', deleted: 'Record deleted', stage: 'Stage changed', call: 'Call status', reply: 'Client reply', mail: 'Email', note: 'Note', task: 'Task', whatsapp: 'WhatsApp', linkedin: 'LinkedIn' })[type] || type;
+}
+async function renderHistory() {
+  const query = $('#search').value.trim();
+  const result = await api(`/history?limit=${historyLimit}&type=${encodeURIComponent(historyType)}&q=${encodeURIComponent(query)}`);
+  const recordValues = activity => {
+    const changes = activity.details?.changes || [];
+    if (!changes.length) return `<div class="history-note">${esc(activity.note || '')}</div>`;
+    return `<div class="history-changes">${changes.map(change => {
+      const before = change.before === undefined ? null : historyValue(change.before);
+      const after = change.after === undefined ? null : historyValue(change.after);
+      return `<div class="history-change"><b>${esc(change.label || change.field)}</b><span>${before === null ? esc(after) : `${esc(before)} <span aria-hidden="true">&rarr;</span> ${esc(after)}`}</span></div>`;
+    }).join('')}</div>`;
+  };
+  $('#view').innerHTML = `<div class="toolbar">
+    <select aria-label="History event filter" onchange="historyType=this.value;historyLimit=100;renderHistory()">
+      <option value="records" ${historyType === 'records' ? 'selected' : ''}>Record changes</option>
+      <option value="" ${historyType === '' ? 'selected' : ''}>All activity</option>
+    </select>
+    <span class="history-count">${result.total} event(s)</span>
+  </div>
+  <div class="history-list">${result.activities.map(activity => `<article class="history-entry">
+    <div class="history-meta"><time datetime="${esc(activity.at)}">${new Date(activity.at).toLocaleString([], { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time><span class="badge history-badge">${esc(historyEventName(activity.type))}</span></div>
+    <h3>${clients.some(client => client.id === activity.clientId)
+      ? `<button class="history-client-link" onclick="openClient('${esc(activity.clientId)}')">${esc(activity.clientName)}</button>`
+      : esc(activity.clientName)}</h3>
+    ${recordValues(activity)}
+  </article>`).join('') || '<div class="empty">No history events match your search.</div>'}</div>
+  ${result.activities.length < result.total && result.limit < 500 ? `<div class="actions" style="justify-content:center"><button class="btn" onclick="historyLimit=Math.min(500,historyLimit+100);renderHistory()">Load older events</button></div>` : result.total > 500 ? '<div class="empty">Showing up to 500 matching events.</div>' : ''}`;
 }
 async function logCall(id, event) {
   // Let the browser launch the phone app immediately, and log the attempt in CRM.
@@ -534,7 +601,7 @@ function toggleSequenceEditor() {
   if (!$('#m_sequence')?.checked) { box.innerHTML = ''; return; }
   const subject = $('#m_sub').value.trim() || 'Following up, {{name}}';
   const body = $('#m_body').value.trim() || 'Hi {{name}},\n\nI wanted to follow up on my earlier message. Please let me know if this is of interest.\n\nRegards,\nRight Head';
-  box.innerHTML = [1, 3, 5, 7, 9].map((day, i) => `<details ${i === 0 ? 'open' : ''} style="margin:10px 0"><summary>Day ${day} email</summary><label>Subject</label><input id="seq_sub_${i}" value="${esc(i ? `Re: ${subject}` : subject)}"><label>Message</label><textarea id="seq_body_${i}" style="min-height:100px">${esc(i ? `Hi {{name}},\n\nFollowing up on my earlier note.\n\n${body}` : body)}</textarea></details>`).join('');
+  box.innerHTML = [0, 2, 4, 6, 8].map((day, i) => `<details ${i === 0 ? 'open' : ''} style="margin:10px 0"><summary>${i === 0 ? 'Send now' : `After ${day * 24} hours`}</summary><label>Subject</label><input id="seq_sub_${i}" value="${esc(i ? `Re: ${subject}` : subject)}"><label>Message</label><textarea id="seq_body_${i}" style="min-height:100px">${esc(i ? `Hi {{name}},\n\nFollowing up on my earlier note.\n\n${body}` : body)}</textarea></details>`).join('');
 }
 async function sequenceAction(id, action) {
   if (!action) return;
@@ -554,8 +621,9 @@ async function editSequence(id) {
   if (!campaign) return;
   const steps = campaign.steps.map(s => ({ ...s }));
   for (let i = 0; i < steps.length; i++) {
-    const subject = prompt(`Day ${steps[i].day} subject`, steps[i].subject); if (subject === null) return;
-    const body = prompt(`Day ${steps[i].day} message`, steps[i].body); if (body === null) return;
+    const schedule = steps[i].day === 0 ? 'Send now' : `After ${steps[i].day * 24} hours`;
+    const subject = prompt(`${schedule} subject`, steps[i].subject); if (subject === null) return;
+    const body = prompt(`${schedule} message`, steps[i].body); if (body === null) return;
     steps[i] = { subject, body };
   }
   try { await api(`/campaigns/${id}/action`, 'POST', { action: 'edit', steps }); toast('Sequence updated'); await renderMail(); }
@@ -584,16 +652,16 @@ async function sendMail() {
   const recipientLabel = audience === 'selected' ? `${recipients.length} selected email address(es)` : 'the selected audience';
   const replyToLast = $('#m_replyToLast')?.checked || false;
   const sendDescription = replyToLast ? ' as numbered replies in each recipient’s last email thread' : '';
-  if (!confirm(sequence ? `Create this automated email sequence for ${recipientLabel}${sendDescription}? It starts sending on Day 1 after you press Start.` : `Send this campaign to ${recipientLabel}${sendDescription} now?`)) return;
+  if (!confirm(sequence ? `Create this automated email sequence for ${recipientLabel}${sendDescription}? The first email sends when you press Start, then follow-ups send every 48 hours.` : `Send this campaign to ${recipientLabel}${sendDescription} now?`)) return;
   const button = $('#mailSendBtn');
   if (button) button.disabled = true;
   try {
   toast('Sending... please wait');
   const r = sequence
-    ? await api('/sequences', 'POST', { audience, ...(recipients ? { recipients } : {}), replyToLast, steps: [1, 3, 5, 7, 9].map((day, i) => ({ day, subject: $(`#seq_sub_${i}`).value, body: $(`#seq_body_${i}`).value })) })
+    ? await api('/sequences', 'POST', { audience, ...(recipients ? { recipients } : {}), replyToLast, steps: [0, 2, 4, 6, 8].map((day, i) => ({ day, subject: $(`#seq_sub_${i}`).value, body: $(`#seq_body_${i}`).value })) })
     : await api('/mail/send', 'POST', { audience, ...(recipients ? { recipients } : {}), subject, body, replyToLast });
   if (r.error) return toast(r.error);
-  toast(sequence ? 'Sequence saved as paused. Press Start to schedule Day 1.' : `Done: ${r.sent}/${r.total} ${r.simulated ? 'simulated' : 'sent'}${r.failed ? ', ' + r.failed + ' failed' : ''}${r.skipped ? ', ' + r.skipped + ' skipped' : ''}`);
+  toast(sequence ? 'Sequence saved as paused. Press Start to send the first email now.' : `Done: ${r.sent}/${r.total} ${r.simulated ? 'simulated' : 'sent'}${r.failed ? ', ' + r.failed + ' failed' : ''}${r.skipped ? ', ' + r.skipped + ' skipped' : ''}`);
   await refresh(); render();
   } finally {
     if (button) button.disabled = false;

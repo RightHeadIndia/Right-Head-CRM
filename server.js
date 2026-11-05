@@ -182,7 +182,8 @@ const STAGES = ['new', 'contacted', 'replied', 'onboarded', 'rejected'];
 const CALLS = ['not_called', 'connected', 'no_answer', 'busy', 'callback'];
 const EMAIL_FOLLOW_UP_HOURS = 48;
 const LEGACY_SEQUENCE_DAYS = [1, 2, 4, 7, 10];
-const SEQUENCE_DAYS = [1, 3, 5, 7, 9];
+const PREVIOUS_SEQUENCE_DAYS = [1, 3, 5, 7, 9];
+const SEQUENCE_DAYS = [0, 2, 4, 6, 8];
 const CLIENT_TEXT_LIMITS = { name: 200, company: 200, phone: 50, email: 254, source: 500, location: 200, notes: 6000, followUp: 40, lastReply: 6000 };
 const COMMUNICATION = ['not_contacted', 'contacted', 'replied', 'opted_out'];
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -236,8 +237,30 @@ function cleanClientInput(value, partial = false) {
   }
   return { clean };
 }
-function log(db, clientId, type, note) {
-  db.activities.push({ id: uid(), clientId, type, note: String(note || ''), at: now() });
+function log(db, clientId, type, note, details) {
+  const client = db.clients.find(item => item.id === clientId);
+  db.activities.push({ id: uid(), clientId, ...(client ? { clientName: client.name } : {}), type, note: String(note || ''), ...(details ? { details } : {}), at: now() });
+}
+const CLIENT_AUDIT_FIELDS = ['name', 'company', 'location', 'phone', 'email', 'alternateEmails', 'source', 'stage', 'callStatus', 'communicationStatus', 'followUp', 'notes', 'optedOut', 'lastReply'];
+const CLIENT_AUDIT_LABELS = {
+  name: 'Name', company: 'Company', location: 'Location', phone: 'Phone', email: 'Email',
+  alternateEmails: 'Additional emails', source: 'Source', stage: 'Stage', callStatus: 'Call status',
+  communicationStatus: 'Communication status', followUp: 'Follow-up', notes: 'Notes',
+  optedOut: 'Email opt-out', lastReply: 'Last reply'
+};
+function clientAuditSnapshot(client) {
+  return Object.fromEntries(CLIENT_AUDIT_FIELDS.map(field => [
+    field, Array.isArray(client[field]) ? [...client[field]] : client[field] ?? ''
+  ]));
+}
+function clientAuditChanges(before, after, includeEmpty = false) {
+  return CLIENT_AUDIT_FIELDS.flatMap(field => {
+    const previous = before?.[field];
+    const current = after?.[field];
+    if (JSON.stringify(previous) === JSON.stringify(current)) return [];
+    if (!before && !includeEmpty && (current === '' || current === false || (Array.isArray(current) && !current.length))) return [];
+    return [{ field, label: CLIENT_AUDIT_LABELS[field], ...(before ? { before: previous } : {}), ...(after ? { after: current } : {}) }];
+  });
 }
 function stopClientSequences(db, clientId, reason) {
   let changed = false;
@@ -262,14 +285,37 @@ for (const campaign of startupDb.campaigns) {
     campaign.steps.length === LEGACY_SEQUENCE_DAYS.length &&
     campaign.steps.every((step, index) => step.day === LEGACY_SEQUENCE_DAYS[index]);
   if (isLegacySequence) {
-    campaign.steps = campaign.steps.map((step, index) => ({ ...step, day: SEQUENCE_DAYS[index] }));
+    campaign.steps = campaign.steps.map((step, index) => ({ ...step, day: PREVIOUS_SEQUENCE_DAYS[index] }));
     if (['active', 'paused'].includes(campaign.status)) {
       for (const recipient of campaign.recipients || []) {
         const nextStep = recipient.nextStep;
         const oldRunAt = recipient.runAt && new Date(recipient.runAt).getTime();
-        if (recipient.status !== 'active' || !Number.isInteger(nextStep) || nextStep < 1 || nextStep >= SEQUENCE_DAYS.length || !Number.isFinite(oldRunAt)) continue;
+        if (recipient.status !== 'active' || !Number.isInteger(nextStep) || nextStep < 1 || nextStep >= PREVIOUS_SEQUENCE_DAYS.length || !Number.isFinite(oldRunAt)) continue;
         const previousSentAt = oldRunAt - (LEGACY_SEQUENCE_DAYS[nextStep] - LEGACY_SEQUENCE_DAYS[nextStep - 1]) * 864e5;
-        recipient.runAt = new Date(previousSentAt + (SEQUENCE_DAYS[nextStep] - SEQUENCE_DAYS[nextStep - 1]) * 864e5).toISOString();
+        recipient.runAt = new Date(previousSentAt + (PREVIOUS_SEQUENCE_DAYS[nextStep] - PREVIOUS_SEQUENCE_DAYS[nextStep - 1]) * 864e5).toISOString();
+      }
+      updateSequenceNextRun(campaign);
+    }
+    campaign.updatedAt = now();
+    recoveredCampaign = true;
+  }
+  const isPreviousSequence = campaign.type === 'sequence' &&
+    Array.isArray(campaign.steps) &&
+    campaign.steps.length === PREVIOUS_SEQUENCE_DAYS.length &&
+    campaign.steps.every((step, index) => step.day === PREVIOUS_SEQUENCE_DAYS[index]);
+  if (isPreviousSequence) {
+    campaign.steps = campaign.steps.map((step, index) => ({ ...step, day: SEQUENCE_DAYS[index] }));
+    if (campaign.status === 'active') {
+      for (const recipient of campaign.recipients || []) {
+        const nextStep = recipient.nextStep;
+        const oldRunAt = recipient.runAt && new Date(recipient.runAt).getTime();
+        if (recipient.status !== 'active' || !Number.isInteger(nextStep) || nextStep < 0 || nextStep >= SEQUENCE_DAYS.length) continue;
+        if (nextStep === 0) {
+          recipient.runAt = now();
+        } else if (Number.isFinite(oldRunAt)) {
+          const previousSentAt = oldRunAt - (PREVIOUS_SEQUENCE_DAYS[nextStep] - PREVIOUS_SEQUENCE_DAYS[nextStep - 1]) * 864e5;
+          recipient.runAt = new Date(previousSentAt + (SEQUENCE_DAYS[nextStep] - SEQUENCE_DAYS[nextStep - 1]) * 864e5).toISOString();
+        }
       }
       updateSequenceNextRun(campaign);
     }
@@ -359,7 +405,7 @@ app.post('/api/clients', (req, res) => {
   };
 
   db.clients.push(c);
-  log(db, c.id, 'created', 'Client added');
+  log(db, c.id, 'created', 'Client record added', { changes: clientAuditChanges(null, clientAuditSnapshot(c)) });
   save(db);
 
   res.json(c);
@@ -380,6 +426,7 @@ app.put('/api/clients/:id', async (req, res, next) => {
   }
 
   const b = result.clean;
+  const before = clientAuditSnapshot(c);
 
   const fields = [
     'name',
@@ -433,6 +480,8 @@ app.put('/api/clients/:id', async (req, res, next) => {
     }
   }
 
+  const changes = clientAuditChanges(before, clientAuditSnapshot(c));
+  if (changes.length) log(db, c.id, 'record', 'Client record updated', { changes });
   c.updatedAt = now();
   save(db);
   // A status dropdown immediately reloads the client list after this response.
@@ -445,8 +494,10 @@ app.put('/api/clients/:id', async (req, res, next) => {
 
 app.delete('/api/clients/:id', (req, res) => {
   const db = load();
+  const client = db.clients.find(x => x.id === req.params.id);
+  if (!client) return res.status(404).json({ error: 'not found' });
+  log(db, client.id, 'deleted', 'Client record deleted');
   db.clients = db.clients.filter(x => x.id !== req.params.id);
-  db.activities = db.activities.filter(a => a.clientId !== req.params.id);
   db.tasks = db.tasks.filter(t => t.clientId !== req.params.id);
   db.deals.forEach(d => {
     if (d.clientId === req.params.id) d.clientId = '';
@@ -462,6 +513,29 @@ app.get('/api/clients/:id/activities', (req, res) => {
       .filter(a => a.clientId === req.params.id)
       .sort((a, b) => b.at.localeCompare(a.at))
   );
+});
+
+app.get('/api/history', (req, res) => {
+  const db = load();
+  const query = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+  const type = typeof req.query.type === 'string' ? req.query.type : '';
+  const limitValue = Number.parseInt(req.query.limit, 10);
+  const limit = Number.isInteger(limitValue) ? Math.min(500, Math.max(1, limitValue)) : 100;
+  const clientsById = new Map(db.clients.map(client => [client.id, client]));
+  const activities = db.activities
+    .map(activity => ({
+      ...activity,
+      clientName: activity.clientName || clientsById.get(activity.clientId)?.name || 'Deleted client'
+    }))
+    .filter(activity => !type || (type === 'records'
+      ? ['created', 'record', 'deleted'].includes(activity.type)
+      : activity.type === type))
+    .filter(activity => !query || [
+      activity.clientName, activity.note,
+      ...(activity.details?.changes || []).flatMap(change => [change.label, change.before, change.after])
+    ].some(value => String(value ?? '').toLowerCase().includes(query)))
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  res.json({ activities: activities.slice(0, limit), total: activities.length, limit });
 });
 
 // Add a note / record a client reply. type: note | reply | call
@@ -640,7 +714,7 @@ app.post('/api/clients/import', (req, res) => {
     };
 
     db.clients.push(c);
-    log(db, c.id, 'created', 'Imported');
+    log(db, c.id, 'created', 'Client record imported', { changes: clientAuditChanges(null, clientAuditSnapshot(c)) });
     added++;
   });
 
@@ -668,14 +742,14 @@ app.get('/api/dashboard', (req, res) => {
 
   const calls = {};
   CALLS.forEach(k => {
-    calls[k] = cs.filter(c => c.callStatus === k).length;
+    calls[k] = cs.filter(c => CALLS.includes(c.callStatus) ? c.callStatus === k : k === 'not_called').length;
   });
   const communication = {};
   COMMUNICATION.forEach(k => { communication[k] = cs.filter(c => (c.communicationStatus || 'not_contacted') === k).length; });
 
   const stages = {};
   STAGES.forEach(k => {
-    stages[k] = cs.filter(c => c.stage === k).length;
+    stages[k] = cs.filter(c => STAGES.includes(c.stage) ? c.stage === k : k === 'new').length;
   });
 
   res.json({
@@ -1019,7 +1093,7 @@ app.post('/api/sequences', (req, res) => {
   const b = req.body || {};
   const key = b.audience || 'all';
   if (!['all', 'selected', ...STAGES.filter(stage => stage !== 'rejected')].includes(key)) return res.status(400).json({ error: 'unknown audience' });
-  if (!validSequenceSteps(b.steps)) return res.status(400).json({ error: 'Provide five personalized sequence emails for days 1, 3, 5, 7 and 9.' });
+  if (!validSequenceSteps(b.steps)) return res.status(400).json({ error: 'Provide five personalized sequence emails for the initial email and four 48-hour follow-ups.' });
   if (b.replyToLast !== undefined && typeof b.replyToLast !== 'boolean') return res.status(400).json({ error: 'replyToLast must be true or false' });
   if (key === 'selected' && !((Array.isArray(b.recipients) && b.recipients.length) || (Array.isArray(b.clientIds) && b.clientIds.length))) {
     return res.status(400).json({ error: 'Select at least one eligible client for this sequence.' });
@@ -1064,8 +1138,8 @@ app.post('/api/campaigns/:id/action', (req, res) => {
     const startMs = Date.now();
     for (const r of c.recipients) {
       if (r.status !== 'active') continue;
-      const dueDay = c.steps[r.nextStep]?.day || 1;
-      const previousDay = c.steps[r.nextStep - 1]?.day || 0;
+      const dueDay = c.steps[r.nextStep]?.day ?? 0;
+      const previousDay = c.steps[r.nextStep - 1]?.day ?? 0;
       r.runAt = new Date(startMs + (dueDay - previousDay) * 864e5).toISOString();
     }
     updateSequenceNextRun(c);
@@ -1083,6 +1157,7 @@ app.post('/api/campaigns/:id/action', (req, res) => {
     c.nextRunAt = '';
   } else return res.status(400).json({ error: 'action must be start, pause, resume, stop or edit' });
   c.updatedAt = now(); save(db); res.json(c);
+  if (action === 'start' || action === 'resume') setImmediate(() => { void runSequenceScheduler(); });
 });
 
 function buildTransport(s) {
@@ -1486,7 +1561,7 @@ async function runSequenceScheduler() {
             saved.sent = (saved.sent || 0) + 1; saved.simulated = saved.simulated || !configured;
             const activity = {
               id: uid(), clientId: client.id, type: 'mail',
-              note: `${mailFields.isFollowUp ? `Follow-up #${mailFields.followUpNumber}: ` : ''}Sequence day ${step.day}: ${subject}${configured ? '' : ' (simulated)'}`,
+              note: `${mailFields.isFollowUp ? `Follow-up #${mailFields.followUpNumber}: ` : ''}${step.day === 0 ? 'Initial sequence email' : `Sequence follow-up after ${step.day} days`}: ${subject}${configured ? '' : ' (simulated)'}`,
               deliveryStatus: configured ? 'accepted' : 'simulated',
               at: now(),
               ...mailFields
