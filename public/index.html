@@ -22,8 +22,15 @@
     <h1 id="pageTitle">Dashboard</h1>
     <div class="head-actions">
       <input id="search" placeholder="Search name, company, phone, email...">
+      <div class="notification-anchor">
+        <button id="notificationButton" class="notification-button" type="button" aria-label="Notifications" aria-expanded="false" aria-controls="notificationPanel" onclick="toggleNotifications()">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+          <span id="notificationCount" class="notification-count" hidden></span>
+        </button>
+        <section id="notificationPanel" class="notification-panel" role="region" aria-label="Notifications" aria-live="polite" hidden></section>
+      </div>
       <button id="themeToggle" class="btn" onclick="toggleTheme()" aria-label="Toggle dark mode">Dark mode</button>
-      <button class="btn primary" onclick="openClient()">+ Add Client</button>
+      <button id="addClientButton" class="btn primary" onclick="openClient()">+ Add Client</button>
     </div>
   </header>
   <section id="view"></section>

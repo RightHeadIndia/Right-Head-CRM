@@ -38,11 +38,12 @@ const HEADER_ALIASES = {
   sno: ['sno', 'srno', 'slno', 'serialno', 'serialnumber'],
   dateadded: ['dateadded', 'date', 'addedon', 'addeddate', 'dateaddedon', 'entrydate', 'createddate', 'datecreated'],
   location: ['location', 'city', 'address', 'place', 'state', 'country', 'region'],
-  credentialsshared: [
+  credentialsShared: [
     'credentialsshared', 'credentialssharedyn', 'credentialssharedyorn', 'credentialssharedyesno',
     'credentialssharedyesorn', 'credentialshared', 'credentialsharedyn', 'credentialsharedyesno',
     'credentials', 'credentialsyn', 'credentialsyesno', 'credential', 'credentialsstatus', 'credsshared'
   ],
+  emailShared: ['emailshared', 'emailsharedyn', 'emailsharedyesno', 'emailsharedyesorn'],
   remark: ['remark', 'remarks'], notes: ['notes', 'note', 'comments', 'comment'],
   meetingStatus: ['meetingstatus'], kanakNotes: ['kanaknotes'], avvniNotes: ['avvninotes'], emailSent: ['emailsent', 'emailsentyn']
 };
@@ -53,6 +54,13 @@ Object.entries(HEADER_ALIASES).forEach(([field, list]) => list.forEach(a => { HE
 const CLIENT_TEXT_LIMITS = { name: 200, company: 200, phone: 50, email: 254, source: 500, location: 200, notes: 6000, followUp: 40, lastReply: 6000 };
 const STAGES = ['new', 'contacted', 'replied', 'onboarded', 'rejected'];
 const CALLS = ['not_called', 'connected', 'no_answer', 'busy', 'callback'];
+
+function parseSharedFlag(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['yes', 'y', 'true', '1', 'shared'].includes(normalized)) return true;
+  if (['no', 'n', 'false', '0', 'not shared', 'not_shared'].includes(normalized)) return false;
+  return null;
+}
 
 function parseFlexibleDate(val) {
   if (!val) return '';
@@ -119,7 +127,7 @@ function rowsToObjects(table) {
       const value = String(r[i] ?? '').trim(), f = fields[i];
       if (!value) return;
       if (!f || o[f]) { if (h) o.other.push(`${h}: ${value}`); return; }
-      o[f] = value;
+      o[f] = f === 'callStatus' ? value.toLowerCase().replace(/[\s-]+/g, '_') : value;
     });
     return o;
   });
@@ -157,11 +165,17 @@ async function importCsvFile(filePath) {
 
   for (const raw of objects) {
     const extras = [];
+    let emailShared = raw.emailShared ? parseSharedFlag(raw.emailShared) : null;
+    let credentialsShared = raw.credentialsShared ? parseSharedFlag(raw.credentialsShared) : null;
+    const importedCallStatus = String(raw.callStatus || '').toLowerCase().replace(/[\s-]+/g, '_');
+    if (importedCallStatus === 'email_shared' && emailShared === null) emailShared = true;
+    if (importedCallStatus === 'credentials_shared' && credentialsShared === null) credentialsShared = true;
     if (raw.sno) extras.push(`S No: ${raw.sno}`);
     if (raw.dateadded) extras.push(`Date Added: ${raw.dateadded}`);
     if (raw.link) extras.push(`Link: ${raw.link}`);
     if (raw.location) extras.push(`Location: ${raw.location}`);
-    if (raw.credentialsshared) extras.push(`Credentials Shared: ${raw.credentialsshared}`);
+    if (raw.emailShared && emailShared === null) extras.push(`Email Shared: ${raw.emailShared}`);
+    if (raw.credentialsShared && credentialsShared === null) extras.push(`Credentials Shared: ${raw.credentialsShared}`);
     if (raw.remark) extras.push(`Remark: ${raw.remark}`);
     for (let n = 1; n <= 12; n++) {
       const v = raw['reminder' + n];
@@ -209,7 +223,9 @@ async function importCsvFile(filePath) {
       location: r.location || '',
       notes: r.notes || '',
       stage: STAGES.includes(raw.stage) ? raw.stage : 'new',
-      callStatus: CALLS.includes(raw.callStatus) ? raw.callStatus : 'not_called',
+      callStatus: CALLS.includes(importedCallStatus) ? importedCallStatus : 'not_called',
+      emailShared: emailShared ?? false,
+      credentialsShared: credentialsShared ?? false,
       followUp: r.followUp || '',
       lastReply: '',
       createdAt,

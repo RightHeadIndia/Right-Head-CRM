@@ -8,7 +8,7 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { openDatabase, readDatabase, writeDatabase } = require('../lib/database');
 
-test('server migrates legacy active and paused sequence schedules on startup', async () => {
+test('server migrates legacy statuses and sequence schedules on startup', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'crm-sequence-migration-'));
   const file = path.join(dir, 'crm.sqlite');
   const key = crypto.randomBytes(32).toString('base64');
@@ -37,6 +37,10 @@ test('server migrates legacy active and paused sequence schedules on startup', a
     createPreviousSchedule('active-initial', 'active', 0, anchor + 864e5),
     createPreviousSchedule('active-follow-up', 'active', 1, anchor + 3 * 864e5)
   ];
+  db.clients = [
+    { id: 'legacy-email-shared', name: 'Legacy email shared', callStatus: 'email_shared' },
+    { id: 'legacy-credentials-shared', name: 'Legacy credentials shared', callStatus: 'credentials_shared' }
+  ];
   writeDatabase(database, db);
   database.close();
 
@@ -63,6 +67,15 @@ test('server migrates legacy active and paused sequence schedules on startup', a
     const response = await fetch(`http://127.0.0.1:${port}/api/campaigns`, { headers: { cookie } });
     assert.equal(response.status, 200);
     const campaigns = await response.json();
+    const clientResponse = await fetch(`http://127.0.0.1:${port}/api/clients`, { headers: { cookie } });
+    assert.equal(clientResponse.status, 200);
+    const migratedClients = await clientResponse.json();
+    const emailShared = migratedClients.find(client => client.id === 'legacy-email-shared');
+    const credentialsShared = migratedClients.find(client => client.id === 'legacy-credentials-shared');
+    assert.equal(emailShared.callStatus, 'not_called');
+    assert.equal(emailShared.emailShared, true);
+    assert.equal(credentialsShared.callStatus, 'not_called');
+    assert.equal(credentialsShared.credentialsShared, true);
     const active = campaigns.find(campaign => campaign.id === 'active-legacy');
     const paused = campaigns.find(campaign => campaign.id === 'paused-legacy');
     assert.deepEqual(active.steps.map(step => step.day), [0, 2, 4, 6, 8]);

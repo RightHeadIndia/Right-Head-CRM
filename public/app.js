@@ -35,6 +35,15 @@ let clients = [];
 let page = location.hash.slice(1) || 'dashboard';
 let settings = {};
 let openTaskCount;
+let notifications = [];
+let notificationLoadError = '';
+let notificationPanelOpen = false;
+const NOTIFICATION_READ_KEY = 'crm-read-notifications';
+let readNotificationIds = new Set();
+try {
+  const savedNotifications = JSON.parse(localStorage.getItem(NOTIFICATION_READ_KEY) || '[]');
+  if (Array.isArray(savedNotifications)) readNotificationIds = new Set(savedNotifications.filter(id => typeof id === 'string'));
+} catch (_) {}
 function applyTheme(theme) {
   const selected = theme === 'dark' ? 'dark' : 'light';
   document.documentElement.dataset.theme = selected;
@@ -70,6 +79,7 @@ const PAGES = {
 async function refresh() {
   clients = await api('/clients');
   try { openTaskCount = (await api('/tasks')).filter(t => !t.done).length; } catch (_) { /* nav badge only */ }
+  await refreshNotifications();
 }
 
 function renderNav() {
@@ -89,6 +99,101 @@ function renderNav() {
     <div class="sep">AI</div>${item('assistant')}
     <div class="sep">System</div>${item('settings')}`;
 }
+
+function unreadNotificationCount() {
+  return notifications.filter(notification => !readNotificationIds.has(notification.id)).length;
+}
+function saveReadNotifications() {
+  try { localStorage.setItem(NOTIFICATION_READ_KEY, JSON.stringify([...readNotificationIds])); } catch (_) {}
+}
+function renderNotificationButton() {
+  const button = $('#notificationButton'), countBadge = $('#notificationCount');
+  if (!button || !countBadge) return;
+  const count = unreadNotificationCount();
+  countBadge.hidden = count === 0;
+  countBadge.textContent = count > 99 ? '99+' : String(count);
+  button.setAttribute('aria-label', count ? `Notifications, ${count} unread` : 'Notifications');
+  button.setAttribute('aria-expanded', String(notificationPanelOpen));
+}
+function renderNotificationPanel() {
+  const panel = $('#notificationPanel');
+  if (!panel) return;
+  const icons = { followup: '&#9200;', task: '&#9745;', reply: '&#9993;', campaign: '&#9993;' };
+  const unread = unreadNotificationCount();
+  panel.innerHTML = `<div class="notification-panel-head"><b>Notifications</b><button type="button" class="notification-mark-read" onclick="markAllNotificationsRead()" ${unread ? '' : 'disabled'}>Mark all read</button></div>
+    ${notificationLoadError ? `<div class="notification-error">${esc(notificationLoadError)}</div>` : ''}
+    <div class="notification-list">${notifications.map(notification => `<button type="button" class="notification-item ${readNotificationIds.has(notification.id) ? 'read' : 'unread'}" onclick="openNotification('${esc(notification.id)}')">
+      <span class="notification-icon notification-icon-${esc(notification.type)}">${icons[notification.type] || '&#8226;'}</span>
+      <span class="notification-copy"><b>${esc(notification.title)}</b><span>${esc(notification.detail || '')}</span><small>${fmt(notification.at)}</small></span>
+      ${readNotificationIds.has(notification.id) ? '' : '<span class="notification-unread-dot" aria-label="Unread"></span>'}
+    </button>`).join('') || (!notificationLoadError ? '<div class="notification-empty">You’re all caught up.</div>' : '')}</div>`;
+}
+async function refreshNotifications() {
+  try {
+    notifications = await api('/notifications');
+    notificationLoadError = '';
+    const activeIds = new Set(notifications.map(notification => notification.id));
+    const nextReadIds = [...readNotificationIds].filter(id => activeIds.has(id));
+    if (nextReadIds.length !== readNotificationIds.size) {
+      readNotificationIds = new Set(nextReadIds);
+      saveReadNotifications();
+    }
+  } catch (error) {
+    notificationLoadError = error.message || 'Could not load notifications.';
+    console.error('Could not load notifications:', error);
+  }
+  renderNotificationButton();
+  if (notificationPanelOpen) renderNotificationPanel();
+}
+async function toggleNotifications() {
+  notificationPanelOpen = !notificationPanelOpen;
+  const panel = $('#notificationPanel');
+  if (!panel) return;
+  panel.hidden = !notificationPanelOpen;
+  renderNotificationButton();
+  if (notificationPanelOpen) {
+    await refreshNotifications();
+    panel.hidden = false;
+    renderNotificationPanel();
+  }
+}
+function markAllNotificationsRead() {
+  notifications.forEach(notification => readNotificationIds.add(notification.id));
+  saveReadNotifications();
+  renderNotificationButton();
+  renderNotificationPanel();
+}
+async function openNotification(id) {
+  const notification = notifications.find(item => item.id === id);
+  if (!notification) return;
+  readNotificationIds.add(notification.id);
+  saveReadNotifications();
+  notificationPanelOpen = false;
+  $('#notificationPanel').hidden = true;
+  renderNotificationButton();
+  if (notification.type === 'followup') go('followups');
+  else if (notification.type === 'task') go('tasks');
+  else if (notification.type === 'campaign') go('mail');
+  else if (notification.clientId) {
+    if (page !== 'clients') go('clients');
+    await openClient(notification.clientId);
+  }
+}
+document.addEventListener('click', event => {
+  if (notificationPanelOpen && !event.target.closest('.notification-anchor')) {
+    notificationPanelOpen = false;
+    $('#notificationPanel').hidden = true;
+    renderNotificationButton();
+  }
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && notificationPanelOpen) {
+    notificationPanelOpen = false;
+    $('#notificationPanel').hidden = true;
+    renderNotificationButton();
+    $('#notificationButton').focus();
+  }
+});
 
 let listLimit = 200; // rows drawn at once; "Show more" adds 200 (keeps big lists fast)
 const selectedClientIds = new Set();
@@ -181,6 +286,8 @@ function renderList() {
     <label class="bulk-field">Stage<select id="bulkStage"><option value="">Keep current</option>${Object.entries(STAGES).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
     <label class="bulk-field">Communication<select id="bulkCommunication"><option value="">Keep current</option>${Object.entries(COMMUNICATION).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
     <label class="bulk-field">Call status<select id="bulkCall"><option value="">Keep current</option>${Object.entries(CALLS).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
+    <label class="bulk-field">Email shared<select id="bulkEmailShared"><option value="">Keep current</option><option value="true">Yes</option><option value="false">No</option></select></label>
+    <label class="bulk-field">Credentials shared<select id="bulkCredentialsShared"><option value="">Keep current</option><option value="true">Yes</option><option value="false">No</option></select></label>
     <label class="bulk-field">Follow-up<input id="bulkFollowUp" type="datetime-local"></label>
     <label class="bulk-clear"><input id="bulkClearFollowUp" type="checkbox"> Clear follow-up</label>
     <label class="bulk-field">Location<input id="bulkLocation" maxlength="200" placeholder="Leave blank to keep"></label>
@@ -194,7 +301,7 @@ function renderList() {
       <button class="btn" onclick="clearClientSelection()">Clear selection</button>
     </div>
   </div>
-  <div class="table-wrap"><table><thead><tr><th class="client-select-cell"><input id="selectVisibleClients" type="checkbox" aria-label="Select all visible clients" title="Select all visible clients" onchange="toggleVisibleClientSelection(this.checked)"></th><th>Client</th><th>Contact</th><th>Sales stage</th><th>Communication</th><th>Call outcome</th><th>Next follow-up</th><th>Actions</th></tr></thead><tbody>
+  <div class="table-wrap"><table><thead><tr><th class="client-select-cell"><input id="selectVisibleClients" type="checkbox" aria-label="Select all visible clients" title="Select all visible clients" onchange="toggleVisibleClientSelection(this.checked)"></th><th>Client</th><th>Contact</th><th>Sales stage</th><th>Communication</th><th>Call outcome</th><th>Email shared</th><th>Credentials shared</th><th>Next follow-up</th><th>Actions</th></tr></thead><tbody>
   ${rows.map(c => `<tr class="row-${Object.hasOwn(STAGES, c.stage) ? c.stage : 'new'}">
     <td class="client-select-cell"><input class="client-row-select" type="checkbox" value="${esc(c.id)}" aria-label="Select ${esc(c.name)}" ${selectedClientIds.has(c.id) ? 'checked' : ''} onchange="toggleClientSelection('${c.id}',this.checked)"></td>
     <td><b>${esc(c.name)}</b><br><small style="color:var(--muted)">${esc(c.company)}${c.location ? ' · ' + esc(c.location) : ''}</small></td>
@@ -202,6 +309,8 @@ function renderList() {
     <td>${badge(c.stage)}</td>
     <td><select onchange="quick('${c.id}',{communicationStatus:this.value})">${Object.keys(COMMUNICATION).map(k => `<option value="${k}" ${(c.communicationStatus || 'not_contacted') === k ? 'selected' : ''}>${COMMUNICATION[k]}</option>`).join('')}</select></td>
     <td><select onchange="quick('${c.id}',{callStatus:this.value})">${Object.keys(CALLS).map(k => `<option value="${k}" ${(c.callStatus || 'not_called') === k ? 'selected' : ''}>${CALLS[k]}</option>`).join('')}</select></td>
+    <td><select aria-label="Email shared with ${esc(c.name)}" onchange="quick('${c.id}',{emailShared:this.value === 'true'})"><option value="false" ${c.emailShared ? '' : 'selected'}>No</option><option value="true" ${c.emailShared ? 'selected' : ''}>Yes</option></select></td>
+    <td><select aria-label="Credentials shared with ${esc(c.name)}" onchange="quick('${c.id}',{credentialsShared:this.value === 'true'})"><option value="false" ${c.credentialsShared ? '' : 'selected'}>No</option><option value="true" ${c.credentialsShared ? 'selected' : ''}>Yes</option></select></td>
     <td class="${isLate(c.followUp) ? 'late' : ''}">${fmt(c.followUp)}</td>
     <td class="client-actions-cell"><div class="client-actions">
       <button class="btn small icon-action" onclick="openClient('${c.id}')" title="Open" aria-label="Open">${CLIENT_ACTION_ICONS.open}</button>
@@ -212,7 +321,7 @@ function renderList() {
       ${c.phone ? `<a class="btn small primary icon-action" href="tel:${esc(c.phone)}" onclick="logCall('${c.id}', event)" title="Call" aria-label="Call">${CLIENT_ACTION_ICONS.call}</a>` : ''}
       ${clientEmailAddresses(c).length && !c.optedOut ? `<button class="btn small icon-action" onclick="openSendMailModal('${c.id}')" title="Email" aria-label="Email">${CLIENT_ACTION_ICONS.email}</button>` : ''}
     </div></td>
-  </tr>`).join('') || '<tr><td colspan="8" class="empty">No clients in this view.</td></tr>'}
+  </tr>`).join('') || '<tr><td colspan="10" class="empty">No clients in this view.</td></tr>'}
   </tbody></table></div>${total > rows.length ? `<div class="actions" style="justify-content:center"><button class="btn" onclick="listLimit+=200;renderList()">Show more (${total - rows.length} not shown)</button></div>` : ''}`;
   updateClientSelectionUI();
 }
@@ -247,6 +356,8 @@ async function applyBulkClientStatus() {
   const stage = $('#bulkStage')?.value || '';
   const communicationStatus = $('#bulkCommunication')?.value || '';
   const callStatus = $('#bulkCall')?.value || '';
+  const emailShared = $('#bulkEmailShared')?.value || '';
+  const credentialsShared = $('#bulkCredentialsShared')?.value || '';
   const followUpInput = $('#bulkFollowUp')?.value || '';
   const location = $('#bulkLocation')?.value.trim() || '';
   const source = $('#bulkSource')?.value.trim() || '';
@@ -255,6 +366,8 @@ async function applyBulkClientStatus() {
   if (stage) patch.stage = stage;
   if (communicationStatus) patch.communicationStatus = communicationStatus;
   if (callStatus) patch.callStatus = callStatus;
+  if (emailShared) patch.emailShared = emailShared === 'true';
+  if (credentialsShared) patch.credentialsShared = credentialsShared === 'true';
   if (followUpInput) patch.followUp = new Date(followUpInput).toISOString();
   if ($('#bulkClearFollowUp')?.checked) patch.followUp = '';
   if (location) patch.location = location;
@@ -386,6 +499,8 @@ async function openClient(id) {
     <div><label>Stage</label><select id="f_stage">${Object.keys(STAGES).map(k => `<option value="${k}" ${(c.stage || 'new') === k ? 'selected' : ''}>${STAGES[k]}</option>`).join('')}</select></div>
     <div><label>Call status</label><select id="f_call">${Object.keys(CALLS).map(k => `<option value="${k}" ${(c.callStatus || 'not_called') === k ? 'selected' : ''}>${CALLS[k]}</option>`).join('')}</select></div>
     <div><label>Communication status</label><select id="f_comm">${Object.keys(COMMUNICATION).map(k => `<option value="${k}" ${(c.communicationStatus || 'not_contacted') === k ? 'selected' : ''}>${COMMUNICATION[k]}</option>`).join('')}</select></div>
+    <div><label>Email shared</label><select id="f_emailShared"><option value="false" ${c.emailShared ? '' : 'selected'}>No</option><option value="true" ${c.emailShared ? 'selected' : ''}>Yes</option></select></div>
+    <div><label>Credentials shared</label><select id="f_credentialsShared"><option value="false" ${c.credentialsShared ? '' : 'selected'}>No</option><option value="true" ${c.credentialsShared ? 'selected' : ''}>Yes</option></select></div>
     <div class="full"><label>Next follow-up (reminder)</label><input type="datetime-local" id="f_follow" value="${toLocalInput(c.followUp)}"></div>
     <div class="full"><label>Notes</label><textarea id="f_notes">${esc(c.notes)}</textarea></div>
     <div class="full"><label style="display:flex;gap:8px;align-items:center"><input id="f_optedOut" type="checkbox" style="width:auto" ${c.optedOut ? 'checked' : ''}> Do not email this lead (opted out)</label></div>
@@ -414,6 +529,7 @@ async function saveClient(id) {
     alternateEmails: $('#f_alternateEmails').value.split(/[\s,;]+/).filter(Boolean),
     location: $('#f_location') ? $('#f_location').value : '', source: $('#f_source') ? $('#f_source').value : '',
     stage: $('#f_stage').value, callStatus: $('#f_call').value, communicationStatus: $('#f_comm').value, notes: $('#f_notes').value, optedOut: $('#f_optedOut').checked,
+    emailShared: $('#f_emailShared').value === 'true', credentialsShared: $('#f_credentialsShared').value === 'true',
     followUp: $('#f_follow').value ? new Date($('#f_follow').value).toISOString() : ''
   };
   if (!body.name) return toast('Name is required');
@@ -450,6 +566,9 @@ let singleMailThread = null;
 let selectedMailAddresses = new Set();
 let mailSelectionQuery = '';
 let mailChoiceLimit = 100;
+let stageMailDrafts = {};
+let numberedFollowUpDrafts = {};
+let numberedFollowUpPreviewRequest = 0;
 const clientEmailAddresses = c => {
   const seen = new Set();
   return [c.email, ...(Array.isArray(c.alternateEmails) ? c.alternateEmails : [])]
@@ -474,8 +593,10 @@ async function renderMail() {
   ${smtpOk ? '' : '<div class="note">Email (SMTP) is not configured yet, so campaigns will run in <b>simulation mode</b> (logged but not actually sent). Add SMTP details in Settings.</div>'}
   <div class="grid cols">
     <div class="panel"><h3>New campaign</h3>
+      <div class="note"><b>Email workflow:</b> Choose an audience below. For a group, select individual client email addresses; the CRM sends a separate email to each address (not a shared CC). Use a regular campaign for one shared message, due reminders for different messages by client stage, numbered reminders for different messages by each recipient’s next follow-up number, or a sequence for five custom emails sent 48 hours apart. Numbered reminders show a preview of who is due and who will be skipped.</div>
       <label>Audience</label>
       <select id="m_aud" onchange="changeMailAudience()"><option value="all">All eligible clients (excluding Red Zone)</option>
+        <option value="due_followups">Due follow-up reminders (today or overdue)</option>
         <option value="selected">Choose individual clients</option>
         ${Object.keys(STAGES).filter(k => k !== 'rejected').map(k => `<option value="${k}">${STAGES[k]}</option>`).join('')}</select>
       <div id="m_cnt" class="empty"></div>
@@ -490,18 +611,25 @@ async function renderMail() {
         <div id="m_client_choices" class="mail-client-picker"></div>
         <div class="note">Red Zone and opted-out clients are excluded. You can select clients from any other stage.</div>
       </div>
-      <label>Start from a template</label>
-      <select id="m_tpl" onchange="loadTemplate(this.value)"><option value="">- none -</option>${mailTpls.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
-      <label style="margin-top:8px;display:block">Subject</label><input id="m_sub" placeholder="e.g. Hello {{name}}, a quick update from us">
-      <label style="margin-top:8px;display:block">Message (use {{name}}, {{company}})</label>
-      <textarea id="m_body" style="min-height:180px" placeholder="Hi {{name}},&#10;&#10;..."></textarea>
-      ${aiWriterBox('m_sub', 'm_body')}
-      <label class="mail-thread-option"><input id="m_replyToLast" type="checkbox"> Send as follow-up to each recipient’s last email thread (numbered automatically)</label>
-      <div class="empty">When enabled, the CRM keeps each recipient’s existing subject and adds “Re:” so the message stays in that conversation; the campaign Subject above is ignored. Automated sequence reminders continue in the same thread after the initial email.</div>
-      <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="m_sequence" type="checkbox" style="width:auto" onchange="toggleSequenceEditor()"> Create automated sequence: initial email + 4 follow-ups</label>
-      <div class="empty">Clients who don’t reply or onboard are moved to Red Zone 3 days after the final follow-up. Record a reply with “Client replied” to move them to Blue; mark onboarded clients Green.</div>
-      <div id="sequenceEditor" class="full"></div>
-      <div class="actions"><button class="btn" onclick="saveAsTemplate()">Save as template</button><button id="mailSendBtn" class="btn primary" onclick="sendMail()">Send campaign</button></div>
+      <label id="m_numbered_followup_option" class="mail-thread-option" style="display:none;margin-top:12px"><input id="m_numbered_followups" type="checkbox" onchange="toggleNumberedFollowups()"> Use a different message for each client’s next reminder number (#1–#4)</label>
+      <div id="m_numbered_followup_editor" class="full" style="display:none"></div>
+      <div id="m_standard_composer">
+        <label>Start from a template</label>
+        <select id="m_tpl" onchange="loadTemplate(this.value)"><option value="">- none -</option>${mailTpls.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
+        <label style="margin-top:8px;display:block">Subject</label><input id="m_sub" placeholder="e.g. Hello {{name}}, a quick update from us">
+        <label style="margin-top:8px;display:block">Message (use {{name}}, {{company}})</label>
+        <textarea id="m_body" style="min-height:180px" placeholder="Hi {{name}},&#10;&#10;..."></textarea>
+        ${aiWriterBox('m_sub', 'm_body')}
+      </div>
+      <div id="m_stage_composers" class="full" style="display:none"></div>
+      <label class="mail-thread-option"><input id="m_replyToLast" type="checkbox"> Continue each recipient’s last email thread</label>
+      <div class="empty">This controls threading, not message content. Each automated sequence step can have its own subject and message; when continuing a thread, follow-up subjects stay with that conversation.</div>
+      <div id="m_sequence_controls">
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="m_sequence" type="checkbox" style="width:auto" onchange="toggleSequenceEditor()"> Create a sequence with a different email for each follow-up (5 emails total)</label>
+        <div class="empty">Edit each email separately below or choose a saved template for each step. The first sends when you select Start; the next four send every 48 hours. Clients who don’t reply or onboard are moved to Red Zone 3 days after the final follow-up.</div>
+        <div id="sequenceEditor" class="full"></div>
+      </div>
+      <div class="actions"><button id="m_save_template" class="btn" onclick="saveAsTemplate()">Save as template</button><button id="mailSendBtn" class="btn primary" onclick="sendMail()">Send campaign</button></div>
     </div>
     <div class="panel"><h3>Campaign history</h3>
       ${camps.map(m => `<div class="item"><b>${esc(m.subject)}</b><small>${fmt(m.at)} · audience: ${esc(m.audience)} · ${m.type === 'sequence' ? `${m.sent || 0} email(s), ${m.total} leads · ${m.recipients?.filter(r => r.status === 'awaiting_outcome').length || 0} awaiting final response · ` : `${m.sent}/${m.total} sent · `}${m.simulated ? 'simulation mode · ' : ''}Status: ${esc(m.status)}${m.nextRunAt ? ` · next run ${fmt(m.nextRunAt)}` : ''}${m.failed ? ` · ${m.failed} failed` : ''}${m.skipped ? ` · ${m.skipped} skipped` : ''}${m.recipients?.filter(r => r.status === 'review').length ? ` · ${m.recipients.filter(r => r.status === 'review').length} uncertain delivery(ies)` : ''}</small>
@@ -509,11 +637,7 @@ async function renderMail() {
         ${m.errors && m.errors.length ? `<details><summary>${m.errors.length} send error(s)</summary>${m.errors.map(e => `<div class="empty">${esc(e)}</div>`).join('')}</details>` : ''}</div>`).join('') || '<div class="empty">No campaigns yet.</div>'}
     </div>
   </div>`;
-  if ($('#m_aud').value === 'selected') {
-    $('#m_selection').style.display = '';
-    renderMailSelection();
-  }
-  audCount();
+  changeMailAudience();
 }
 function mailSelectionMatches() {
   const query = mailSelectionQuery.trim().toLowerCase();
@@ -543,10 +667,115 @@ function renderMailSelection() {
   }
 }
 function changeMailAudience() {
+  const audience = $('#m_aud').value;
   const selection = $('#m_selection');
-  if (selection) selection.style.display = $('#m_aud').value === 'selected' ? '' : 'none';
-  if ($('#m_aud').value === 'selected') renderMailSelection();
+  if (selection) selection.style.display = audience === 'selected' ? '' : 'none';
+  const numberedOption = $('#m_numbered_followup_option');
+  if (numberedOption) numberedOption.style.display = ['selected', 'due_followups'].includes(audience) ? '' : 'none';
+  const numberedEditor = $('#m_numbered_followup_editor');
+  if (numberedEditor && !['selected', 'due_followups'].includes(audience)) numberedEditor.style.display = 'none';
+  if (['selected', 'due_followups'].includes(audience) && $('#m_numbered_followups')?.checked) renderNumberedFollowupEditors();
+  updateMailComposerVisibility();
+  if (audience === 'selected') renderMailSelection();
   audCount();
+}
+function updateMailComposerVisibility() {
+  const dueFollowups = $('#m_aud')?.value === 'due_followups';
+  const sequence = $('#m_sequence')?.checked;
+  const numberedFollowups = $('#m_numbered_followups')?.checked && ['selected', 'due_followups'].includes($('#m_aud')?.value);
+  $('#m_standard_composer').style.display = dueFollowups || sequence || numberedFollowups ? 'none' : '';
+  $('#m_stage_composers').style.display = dueFollowups && !sequence && !numberedFollowups ? '' : 'none';
+  $('#m_save_template').style.display = dueFollowups || sequence || numberedFollowups ? 'none' : '';
+  $('#m_sequence_controls').style.display = numberedFollowups ? 'none' : '';
+  const editor = $('#m_numbered_followup_editor');
+  if (editor) editor.style.display = numberedFollowups ? '' : 'none';
+}
+function toggleNumberedFollowups() {
+  const enabled = $('#m_numbered_followups')?.checked;
+  if (enabled && $('#m_sequence')?.checked) {
+    $('#m_sequence').checked = false;
+    $('#sequenceEditor').innerHTML = '';
+  }
+  if (enabled) $('#m_replyToLast').checked = true;
+  updateMailComposerVisibility();
+  if (enabled) renderNumberedFollowupEditors();
+}
+function renderNumberedFollowupEditors() {
+  const box = $('#m_numbered_followup_editor');
+  if (!box) return;
+  const dueAudience = $('#m_aud')?.value === 'due_followups';
+  box.innerHTML = `<div class="note">The CRM checks each ${dueAudience ? 'due follow-up client' : 'selected client'}’s email history and next follow-up date${dueAudience ? '' : ', across client stages'}. It sends only the matching reminder to clients who have not replied and are due; others are skipped. Reminder #1 is the first follow-up after the initial email. Messages stay in the existing email thread. Choose a saved template for its message body; the thread subject is kept.</div><div id="m_followup_preview" class="empty">Checking follow-up recipients…</div>${[1, 2, 3, 4].map(number => {
+    const body = numberedFollowUpDrafts[number] || '';
+    return `<section class="panel" style="margin-top:12px">
+      <h3>Reminder #${number}</h3>
+      <label>Start from a saved template</label><select onchange="loadNumberedFollowupTemplate(${number},this.value)"><option value="">Write a different message</option>${mailTpls.map(template => `<option value="${esc(template.id)}">${esc(template.name)}</option>`).join('')}</select>
+      <label style="margin-top:8px;display:block">Message (use {{name}}, {{company}})</label>
+      <textarea id="m_followup_body_${number}" style="min-height:120px" placeholder="Write reminder #${number}..." oninput="numberedFollowUpDrafts[${number}]=this.value">${esc(body)}</textarea>
+    </section>`;
+  }).join('')}`;
+  refreshNumberedFollowupPreview();
+}
+async function refreshNumberedFollowupPreview() {
+  const box = $('#m_followup_preview');
+  if (!box || !$('#m_numbered_followups')?.checked) return;
+  const requestId = ++numberedFollowUpPreviewRequest;
+  const dueAudience = $('#m_aud')?.value === 'due_followups';
+  const recipients = dueAudience ? null : getSelectedMailRecipients();
+  if (!dueAudience && !recipients.length) {
+    box.textContent = 'Select client email addresses to preview their next due reminder.';
+    return;
+  }
+  if (dueAudience) {
+    box.textContent = 'Checking clients with due reminders…';
+  }
+  box.textContent = dueAudience ? 'Checking clients with due reminders…' : 'Checking selected recipients…';
+  try {
+    const result = await api('/mail/follow-up-preview', 'POST', dueAudience
+      ? { audience: 'due_followups' }
+      : { recipients });
+    if (requestId !== numberedFollowUpPreviewRequest || !$('#m_numbered_followups')?.checked ||
+        !['selected', 'due_followups'].includes($('#m_aud')?.value)) return;
+    const rows = result.recipients || [];
+    const due = rows.filter(item => item.eligible);
+    const byNumber = [1, 2, 3, 4].map(number =>
+      `${number}: ${due.filter(item => item.nextFollowUpNumber === number).length}`
+    ).join(' · ');
+    const skipped = rows.filter(item => !item.eligible);
+    box.innerHTML = `<b>${due.length} due and unreplied</b> · ${esc(byNumber)}${result.ignored ? ` · ${result.ignored} unavailable or ineligible` : ''}${skipped.length ? `<details style="margin-top:6px"><summary>${skipped.length} ${dueAudience ? 'client email(s)' : 'selected address(es)'} will be skipped</summary>${skipped.map(item => `<div>${esc(item.clientName)} (${esc(item.email)}): ${esc(item.reason)}</div>`).join('')}</details>` : ''}<div>Only reminder numbers with a message above will be sent.</div>`;
+  } catch (error) {
+    if (requestId === numberedFollowUpPreviewRequest) box.textContent = `Could not check follow-ups: ${error.message}`;
+  }
+}
+function loadNumberedFollowupTemplate(number, templateId) {
+  const template = mailTpls.find(item => item.id === templateId);
+  if (!template) return;
+  const bodyInput = $(`#m_followup_body_${number}`);
+  bodyInput.value = template.body;
+  numberedFollowUpDrafts[number] = template.body;
+}
+function renderStageMailEditors(byStage) {
+  const box = $('#m_stage_composers');
+  if (!box) return;
+  const stages = Object.keys(STAGES).filter(stage => !['onboarded', 'rejected'].includes(stage) && byStage[stage] > 0);
+  if (!stages.length) {
+    box.innerHTML = '<div class="empty">No clients with an eligible email address have a follow-up reminder due today or overdue.</div>';
+    return;
+  }
+  box.innerHTML = `<div class="note">Write a separate reminder for each stage with clients due. Each client will receive the message for their stage when the campaign is sent.</div>${stages.map(stage => {
+    const draft = stageMailDrafts[stage] || {};
+    return `<section class="panel" style="margin-top:12px">
+      <h3>${esc(STAGES[stage])} · ${byStage[stage]} client(s)</h3>
+      <label>Subject</label><input id="m_stage_sub_${stage}" value="${esc(draft.subject || '')}" placeholder="Subject for ${esc(STAGES[stage])}" oninput="updateStageMailDraft('${stage}')">
+      <label style="margin-top:8px;display:block">Message (use {{name}}, {{company}})</label>
+      <textarea id="m_stage_body_${stage}" style="min-height:140px" placeholder="Write the reminder for ${esc(STAGES[stage])} clients..." oninput="updateStageMailDraft('${stage}')">${esc(draft.body || '')}</textarea>
+    </section>`;
+  }).join('')}`;
+}
+function updateStageMailDraft(stage) {
+  stageMailDrafts[stage] = {
+    subject: $(`#m_stage_sub_${stage}`).value,
+    body: $(`#m_stage_body_${stage}`).value
+  };
 }
 function toggleMailAddress(id, email, checked) {
   const key = mailAddressKey(id, email);
@@ -554,6 +783,7 @@ function toggleMailAddress(id, email, checked) {
   else selectedMailAddresses.delete(key);
   renderMailSelection();
   audCount();
+  if ($('#m_numbered_followups')?.checked) refreshNumberedFollowupPreview();
 }
 function selectVisibleMailClients() {
   mailSelectionMatches().slice(0, mailChoiceLimit).forEach(c => {
@@ -562,11 +792,13 @@ function selectVisibleMailClients() {
   });
   renderMailSelection();
   audCount();
+  if ($('#m_numbered_followups')?.checked) refreshNumberedFollowupPreview();
 }
 function clearMailClientSelection() {
   selectedMailAddresses.clear();
   renderMailSelection();
   audCount();
+  if ($('#m_numbered_followups')?.checked) refreshNumberedFollowupPreview();
 }
 function getSelectedMailRecipients() {
   const selected = [], seenEmails = new Set();
@@ -598,10 +830,30 @@ async function saveAsTemplate() {
 }
 function toggleSequenceEditor() {
   const box = $('#sequenceEditor');
-  if (!$('#m_sequence')?.checked) { box.innerHTML = ''; return; }
+  if (!$('#m_sequence')?.checked) {
+    box.innerHTML = '';
+    updateMailComposerVisibility();
+    return;
+  }
+  updateMailComposerVisibility();
   const subject = $('#m_sub').value.trim() || 'Following up, {{name}}';
-  const body = $('#m_body').value.trim() || 'Hi {{name}},\n\nI wanted to follow up on my earlier message. Please let me know if this is of interest.\n\nRegards,\nRight Head';
-  box.innerHTML = [0, 2, 4, 6, 8].map((day, i) => `<details ${i === 0 ? 'open' : ''} style="margin:10px 0"><summary>${i === 0 ? 'Send now' : `After ${day * 24} hours`}</summary><label>Subject</label><input id="seq_sub_${i}" value="${esc(i ? `Re: ${subject}` : subject)}"><label>Message</label><textarea id="seq_body_${i}" style="min-height:100px">${esc(i ? `Hi {{name}},\n\nFollowing up on my earlier note.\n\n${body}` : body)}</textarea></details>`).join('');
+  const body = $('#m_body').value.trim() || 'Hi {{name}},\n\nI wanted to introduce Right Head and learn whether our services may be relevant to your team.\n\nRegards,\nRight Head';
+  const followUpBodies = [
+    'Hi {{name}},\n\nI wanted to follow up on my earlier email. Would you be available to discuss this further?\n\nRegards,\nRight Head',
+    'Hi {{name}},\n\nI wanted to check whether you had a chance to review my previous email. Please let me know if you have any questions.\n\nRegards,\nRight Head',
+    'Hi {{name}},\n\nWould a brief conversation be useful? I would be happy to work around your schedule.\n\nRegards,\nRight Head',
+    'Hi {{name}},\n\nI will close the loop for now. If this is relevant in the future, feel free to reply and I will be glad to reconnect.\n\nRegards,\nRight Head'
+  ];
+  box.innerHTML = [0, 2, 4, 6, 8].map((day, i) => `<details ${i === 0 ? 'open' : ''} style="margin:10px 0"><summary>${i === 0 ? 'Email 1 · Initial email · Send now' : `Email ${i + 1} · Follow-up ${i} · After ${day * 24} hours`}</summary>
+    <label>Start from a saved template</label><select onchange="loadSequenceTemplate(${i},this.value)"><option value="">Write a different message</option>${mailTpls.map(template => `<option value="${esc(template.id)}">${esc(template.name)}</option>`).join('')}</select>
+    <label style="margin-top:8px;display:block">Subject</label><input id="seq_sub_${i}" value="${esc(i ? `Re: ${subject}` : subject)}">
+    <label style="margin-top:8px;display:block">Message (use {{name}}, {{company}})</label><textarea id="seq_body_${i}" style="min-height:120px">${esc(i ? followUpBodies[i - 1] : body)}</textarea></details>`).join('');
+}
+function loadSequenceTemplate(index, templateId) {
+  const template = mailTpls.find(item => item.id === templateId);
+  if (!template) return;
+  $(`#seq_sub_${index}`).value = template.subject;
+  $(`#seq_body_${index}`).value = template.body;
 }
 async function sequenceAction(id, action) {
   if (!action) return;
@@ -638,31 +890,76 @@ async function audCount() {
     return;
   }
   const r = await api('/mail/audience/' + audience);
-  $('#m_cnt').textContent = `${r.count} recipient(s) with an eligible email address`;
+  if ($('#m_aud')?.value !== audience) return;
+  $('#m_cnt').textContent = audience === 'due_followups'
+    ? `${r.count} client(s) with an email and a follow-up reminder due today or overdue`
+    : `${r.count} recipient(s) with an eligible email address`;
+  if (audience === 'due_followups' && !$('#m_numbered_followups')?.checked) renderStageMailEditors(r.byStage || {});
 }
 async function sendMail() {
-  const subject = $('#m_sub').value.trim(), body = $('#m_body').value.trim();
-  if (!subject || !body) return toast('Subject and message are required');
   const audience = $('#m_aud').value;
+  const sequence = $('#m_sequence')?.checked || false;
+  const numberedFollowups = ['selected', 'due_followups'].includes(audience) && $('#m_numbered_followups')?.checked;
+  const stageFollowupCampaign = audience === 'due_followups' && !sequence && !numberedFollowups;
+  const subject = stageFollowupCampaign ? '' : $('#m_sub').value.trim();
+  const body = stageFollowupCampaign ? '' : $('#m_body').value.trim();
+  if (!stageFollowupCampaign && !numberedFollowups && (!subject || !body)) return toast('Subject and message are required');
+  const stageMessages = {};
+  if (stageFollowupCampaign) {
+    Object.keys(STAGES).filter(stage => !['onboarded', 'rejected'].includes(stage)).forEach(stage => {
+      const subjectInput = $(`#m_stage_sub_${stage}`);
+      const bodyInput = $(`#m_stage_body_${stage}`);
+      if (subjectInput && bodyInput) {
+        stageMessages[stage] = { subject: subjectInput.value.trim(), body: bodyInput.value.trim() };
+        stageMailDrafts[stage] = stageMessages[stage];
+      }
+    });
+    if (!Object.keys(stageMessages).length) return toast('There are no eligible clients with due follow-up reminders.');
+    const missingStage = Object.entries(stageMessages).find(([, message]) => !message.subject || !message.body);
+    if (missingStage) return toast(`Add a subject and message for the ${STAGES[missingStage[0]]} stage.`);
+  }
   const recipients = audience === 'selected'
     ? getSelectedMailRecipients()
     : undefined;
   if (audience === 'selected' && !recipients.length) return toast('Select at least one email address');
-  const sequence = $('#m_sequence')?.checked;
-  const recipientLabel = audience === 'selected' ? `${recipients.length} selected email address(es)` : 'the selected audience';
-  const replyToLast = $('#m_replyToLast')?.checked || false;
+  const followUpMessages = numberedFollowups
+    ? Object.fromEntries([1, 2, 3, 4]
+      .map(number => [number, $(`#m_followup_body_${number}`)?.value.trim() || ''])
+      .filter(([, message]) => message)
+      .map(([number, message]) => [number, { body: message }]))
+    : null;
+  if (numberedFollowups && !Object.keys(followUpMessages).length) return toast('Write a message for at least one reminder number.');
+  const sequenceSteps = sequence
+    ? [0, 2, 4, 6, 8].map((day, i) => ({ day, subject: $(`#seq_sub_${i}`).value.trim(), body: $(`#seq_body_${i}`).value.trim() }))
+    : null;
+  const missingStep = sequenceSteps?.findIndex(step => !step.subject || !step.body) ?? -1;
+  if (missingStep !== -1) return toast(`Add a subject and message for Email ${missingStep + 1}.`);
+  const recipientLabel = audience === 'selected'
+    ? `${recipients.length} selected email address(es)`
+    : audience === 'due_followups' ? 'clients with due follow-up reminders' : 'the selected audience';
+  const replyToLast = numberedFollowups || $('#m_replyToLast')?.checked || false;
   const sendDescription = replyToLast ? ' as numbered replies in each recipient’s last email thread' : '';
-  if (!confirm(sequence ? `Create this automated email sequence for ${recipientLabel}${sendDescription}? The first email sends when you press Start, then follow-ups send every 48 hours.` : `Send this campaign to ${recipientLabel}${sendDescription} now?`)) return;
+  if (!confirm(numberedFollowups
+    ? `Send the configured reminder message to each ${audience === 'due_followups' ? 'due follow-up client' : 'selected recipient'} whose next follow-up number matches? Recipients without a matching saved thread/message or whose reminder is not due will be skipped.`
+    : sequence ? `Create this automated email sequence for ${recipientLabel}${sendDescription}? The first email sends when you press Start, then follow-ups send every 48 hours.` : `Send this campaign to ${recipientLabel}${sendDescription} now?`)) return;
   const button = $('#mailSendBtn');
   if (button) button.disabled = true;
   try {
   toast('Sending... please wait');
   const r = sequence
-    ? await api('/sequences', 'POST', { audience, ...(recipients ? { recipients } : {}), replyToLast, steps: [0, 2, 4, 6, 8].map((day, i) => ({ day, subject: $(`#seq_sub_${i}`).value, body: $(`#seq_body_${i}`).value })) })
-    : await api('/mail/send', 'POST', { audience, ...(recipients ? { recipients } : {}), subject, body, replyToLast });
+    ? await api('/sequences', 'POST', { audience, ...(recipients ? { recipients } : {}), replyToLast, steps: sequenceSteps })
+    : await api('/mail/send', 'POST', {
+      audience,
+      ...(recipients ? { recipients } : {}),
+      ...(numberedFollowups ? { followUpMessages } : {}),
+      ...(stageFollowupCampaign ? { stageMessages } : { subject, body }),
+      replyToLast
+    });
   if (r.error) return toast(r.error);
   toast(sequence ? 'Sequence saved as paused. Press Start to send the first email now.' : `Done: ${r.sent}/${r.total} ${r.simulated ? 'simulated' : 'sent'}${r.failed ? ', ' + r.failed + ' failed' : ''}${r.skipped ? ', ' + r.skipped + ' skipped' : ''}`);
   await refresh(); render();
+  } catch (e) {
+    toast(e.message);
   } finally {
     if (button) button.disabled = false;
   }
@@ -819,11 +1116,12 @@ const HEADER_ALIASES = {
   sno: ['sno', 'srno', 'slno', 'serialno', 'serialnumber'],
   dateadded: ['dateadded', 'date', 'addedon', 'addeddate', 'dateaddedon', 'entrydate', 'createddate', 'datecreated'],
   location: ['location', 'city', 'address', 'place', 'state', 'country', 'region'],
-  credentialsshared: [
+  credentialsShared: [
     'credentialsshared', 'credentialssharedyn', 'credentialssharedyorn', 'credentialssharedyesno',
     'credentialssharedyesorn', 'credentialshared', 'credentialsharedyn', 'credentialsharedyesno',
     'credentials', 'credentialsyn', 'credentialsyesno', 'credential', 'credentialsstatus', 'credsshared'
   ],
+  emailShared: ['emailshared', 'emailsharedyn', 'emailsharedyesno', 'emailsharedyesorn'],
   remark: ['remark', 'remarks'], notes: ['notes', 'note', 'comments', 'comment'],
   meetingStatus: ['meetingstatus'], kanakNotes: ['kanaknotes'], avvniNotes: ['avvninotes'], emailSent: ['emailsent', 'emailsentyn']
 };
@@ -850,6 +1148,13 @@ function parseFlexibleDate(val) {
   const iso = new Date(s);
   if (!isNaN(iso.getTime())) return iso.toISOString();
   return '';
+}
+
+function parseSharedFlag(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['yes', 'y', 'true', '1', 'shared'].includes(normalized)) return true;
+  if (['no', 'n', 'false', '0', 'not shared', 'not_shared'].includes(normalized)) return false;
+  return null;
 }
 
 // table = [headerRow, ...dataRows] -> array of objects. Headings are matched ignoring case, spaces, dots and symbols.
@@ -911,11 +1216,17 @@ function parseCsv(text) {
 function prepareImportRows(rawRows) {
   return rawRows.map(r => {
     const extras = [];
+    const sharedFlags = {};
     if (r.sno) extras.push(`S No: ${r.sno}`);
     if (r.dateadded) extras.push(`Date Added: ${r.dateadded}`);
     if (r.link) extras.push(`Link: ${r.link}`);
     if (r.location) extras.push(`Location: ${r.location}`);
-    if (r.credentialsshared) extras.push(`Credentials Shared: ${r.credentialsshared}`);
+    for (const [field, label] of [['emailShared', 'Email Shared'], ['credentialsShared', 'Credentials Shared']]) {
+      if (!r[field]) continue;
+      const value = parseSharedFlag(r[field]);
+      if (value === null) extras.push(`${label}: ${r[field]}`);
+      else sharedFlags[field] = value;
+    }
     if (r.remark) extras.push(`Remark: ${r.remark}`);
     for (let n = 1; n <= 12; n++) {
       const v = r['reminder' + n];
@@ -928,13 +1239,17 @@ function prepareImportRows(rawRows) {
     const existingNotes = r.notes ? String(r.notes).trim() : '';
     const notes = [existingNotes, ...extras, ...(r.other || [])].filter(Boolean).join(' | ');
     const validStage = Object.keys(STAGES).includes(r.stage) ? r.stage : 'new';
-    const validCall = Object.keys(CALLS).includes(r.callStatus) ? r.callStatus : 'not_called';
+    const importedCallStatus = String(r.callStatus || '').toLowerCase().replace(/[\s-]+/g, '_');
+    if (importedCallStatus === 'email_shared' && sharedFlags.emailShared === undefined) sharedFlags.emailShared = true;
+    if (importedCallStatus === 'credentials_shared' && sharedFlags.credentialsShared === undefined) sharedFlags.credentialsShared = true;
+    const validCall = Object.keys(CALLS).includes(importedCallStatus) ? importedCallStatus : 'not_called';
     const row = {};
     if (r.name) row.name = r.name;
     if (r.company) row.company = r.company;
     if (r.phone) row.phone = r.phone;
     if (r.email) row.email = r.email;
     if (r.alternateEmails) row.alternateEmails = r.alternateEmails.flatMap(value => String(value).split(/[\s,;]+/)).filter(Boolean);
+    Object.assign(row, sharedFlags);
     if (r.location) row.location = r.location;
     if (r.source || r.link) row.source = r.source || r.link || '';
     if (r.dateadded) {

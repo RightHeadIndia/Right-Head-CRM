@@ -38,6 +38,7 @@ test('everything requires login', async () => {
   assert.equal(page.status, 302);
   assert.equal((await call('GET', '/login.html', undefined, { nocookie: true })).status, 200);
   assert.equal((await call('GET', '/api/backup', undefined, { nocookie: true })).status, 401);
+  assert.equal((await call('GET', '/api/notifications', undefined, { nocookie: true })).status, 401);
 });
 
 test('wrong password is refused, right password signs in', async () => {
@@ -73,6 +74,63 @@ test('client create / validate / update', async () => {
   assert.ok(added.details.changes.some(change => change.field === 'name' && change.after === c.json.name));
   assert.ok(updated.details.changes.some(change => change.field === 'callStatus' && change.before === 'not_called' && change.after === 'connected'));
   assert.ok(updated.details.changes.some(change => change.field === 'stage' && change.before === 'new' && change.after === 'contacted'));
+});
+
+test('notifications include due follow-ups, open tasks, and recent client replies', async () => {
+  const pastDue = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const client = await call('POST', '/api/clients', {
+    name: 'Notification test',
+    followUp: pastDue
+  });
+  assert.equal(client.status, 200);
+
+  const task = await call('POST', '/api/tasks', {
+    title: 'Review notification test',
+    clientId: client.json.id,
+    dueAt: pastDue
+  });
+  assert.equal(task.status, 200);
+  const completedTask = await call('POST', '/api/tasks', {
+    title: 'Completed notification test',
+    clientId: client.json.id,
+    dueAt: pastDue
+  });
+  await call('PUT', `/api/tasks/${completedTask.json.id}`, { done: true });
+  await call('POST', `/api/clients/${client.json.id}/activity`, { type: 'reply', note: 'Recent reply notification' });
+
+  const response = await call('GET', '/api/notifications');
+  assert.equal(response.status, 200);
+  assert.ok(response.json.some(item => item.type === 'followup' && item.clientId === client.json.id && item.title === 'Follow-up overdue'));
+  assert.ok(response.json.some(item => item.type === 'task' && item.taskId === task.json.id && item.title === 'Task overdue'));
+  assert.ok(response.json.some(item => item.type === 'reply' && item.clientId === client.json.id && item.detail.includes('Recent reply notification')));
+  assert.ok(!response.json.some(item => item.taskId === completedTask.json.id));
+  await call('DELETE', `/api/clients/${client.json.id}`);
+});
+
+test('email and credentials sharing flags are separate from phone call outcomes', async () => {
+  const created = await call('POST', '/api/clients', {
+    name: 'Sharing status test',
+    emailShared: true,
+    credentialsShared: false,
+    callStatus: 'connected'
+  });
+  assert.equal(created.status, 200);
+  assert.equal(created.json.emailShared, true);
+  assert.equal(created.json.credentialsShared, false);
+  assert.equal(created.json.callStatus, 'connected');
+
+  const updated = await call('PUT', `/api/clients/${created.json.id}`, {
+    emailShared: false,
+    credentialsShared: true
+  });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.json.emailShared, false);
+  assert.equal(updated.json.credentialsShared, true);
+  assert.equal(updated.json.callStatus, 'connected');
+
+  const invalid = await call('PUT', `/api/clients/${created.json.id}`, { credentialsShared: 'yes' });
+  assert.equal(invalid.status, 400);
+  assert.equal((await call('PUT', `/api/clients/${created.json.id}`, { callStatus: 'email_shared' })).status, 400);
 });
 
 test('dashboard and report stage and call counts cover all client records', async () => {
@@ -149,6 +207,7 @@ test('tasks, deals, templates, reports, exports', async () => {
   assert.equal(rep.deals.wonValue, 50000);
   const csv = await call('GET', '/api/export/clients.csv');
   assert.match(csv.text, /^\ufeff?name,company,phone/);
+  assert.match(csv.text, /callStatus,emailShared,credentialsShared/);
   assert.equal((await call('GET', '/api/export/hack')).status, 404);
   const del = await call('DELETE', '/api/clients/' + amit.id);
   assert.equal(del.status, 200);
@@ -168,6 +227,160 @@ test('mass mail runs in simulation mode and never mails the Red Zone', async () 
   assert.ok(r.json.sent >= 1);
   const acts = (await call('GET', '/api/clients/' + ok.json.id + '/activities')).json;
   assert.ok(!acts.some(a => a.type === 'mail'));
+});
+
+test('mass mail can target clients with follow-up reminders due today or overdue', async () => {
+  const due = await call('POST', '/api/clients', {
+    name: 'Due reminder',
+    email: 'due-reminder@test.example',
+    followUp: new Date().toISOString()
+  });
+  const overdue = await call('POST', '/api/clients', {
+    name: 'Overdue reminder',
+    email: 'overdue-reminder@test.example',
+    followUp: new Date(Date.now() - 86400000).toISOString()
+  });
+  const upcoming = await call('POST', '/api/clients', {
+    name: 'Upcoming reminder',
+    email: 'upcoming-reminder@test.example',
+    followUp: new Date(Date.now() + 86400000).toISOString()
+  });
+  const onboarded = await call('POST', '/api/clients', {
+    name: 'Onboarded reminder',
+    email: 'onboarded-reminder@test.example',
+    stage: 'onboarded',
+    followUp: new Date(Date.now() - 86400000).toISOString()
+  });
+  const optedOut = await call('POST', '/api/clients', {
+    name: 'Opted-out reminder',
+    email: 'opted-out-reminder@test.example',
+    followUp: new Date(Date.now() - 86400000).toISOString()
+  });
+  await call('POST', `/api/clients/${optedOut.json.id}/activity`, { type: 'reply', note: 'Please do not contact me again.' });
+
+  const audience = await call('GET', '/api/mail/audience/due_followups');
+  assert.equal(audience.status, 200);
+  assert.equal(audience.json.count, 2);
+
+  const campaign = await call('POST', '/api/mail/send', {
+    audience: 'due_followups',
+    subject: 'Following up, {{name}}',
+    body: 'Hello {{name}}'
+  });
+  assert.equal(campaign.status, 200);
+  assert.equal(campaign.json.audience, 'due_followups');
+  assert.equal(campaign.json.total, 2);
+  assert.equal(campaign.json.sent, 2);
+
+  const clients = (await call('GET', '/api/clients')).json;
+  assert.ok(clients.find(client => client.id === due.json.id).followUp);
+  assert.ok(clients.find(client => client.id === overdue.json.id).followUp);
+  assert.equal(clients.find(client => client.id === upcoming.json.id).followUp, upcoming.json.followUp);
+  assert.equal(clients.find(client => client.id === onboarded.json.id).followUp, onboarded.json.followUp);
+  assert.equal(clients.find(client => client.id === optedOut.json.id).followUp, optedOut.json.followUp);
+});
+
+test('due follow-up mass mail sends a separate message for each client stage', async () => {
+  const stageClients = [];
+  for (const stage of ['new', 'contacted', 'replied']) {
+    const created = await call('POST', '/api/clients', {
+      name: `${stage} stage reminder`,
+      email: `${stage}-stage-reminder@test.example`,
+      stage,
+      followUp: new Date(Date.now() - 60000).toISOString()
+    });
+    assert.equal(created.status, 200);
+    stageClients.push(created.json);
+  }
+
+  const stageMessages = {
+    new: { subject: 'Introduction reminder for {{name}}', body: 'New lead message for {{name}}' },
+    contacted: { subject: 'Checking in with {{name}}', body: 'Contacted message for {{name}}' },
+    replied: { subject: 'Reply follow-up for {{name}}', body: 'Replied message for {{name}}' }
+  };
+  const missingStageMessage = await call('POST', '/api/mail/send', {
+    audience: 'due_followups',
+    stageMessages: { new: { subject: 'Only new', body: 'Only for new clients' } }
+  });
+  assert.equal(missingStageMessage.status, 400);
+  assert.match(missingStageMessage.json.error, /each stage with due clients/);
+
+  const campaign = await call('POST', '/api/mail/send', {
+    audience: 'due_followups',
+    stageMessages
+  });
+  assert.equal(campaign.status, 200);
+  assert.equal(campaign.json.total, 3);
+  assert.equal(campaign.json.sent, 3);
+  assert.equal(campaign.json.stageSubjects.new, 'Introduction reminder for {{name}}');
+  assert.equal(campaign.json.stageSubjects.contacted, 'Checking in with {{name}}');
+  assert.equal(campaign.json.stageSubjects.replied, 'Reply follow-up for {{name}}');
+
+  for (const client of stageClients) {
+    const activities = (await call('GET', `/api/clients/${client.id}/activities`)).json;
+    const email = activities.find(activity => activity.type === 'mail');
+    assert.ok(email, `expected a reminder for the ${client.stage} client`);
+    assert.equal(email.emailSubject, stageMessages[client.stage].subject.replace('{{name}}', client.name));
+  }
+});
+
+test('due follow-up mass mail supports different messages for each next reminder number', async () => {
+  const leads = [];
+  for (const stage of ['new', 'contacted']) {
+    const created = await call('POST', '/api/clients', {
+      name: `${stage} numbered reminder`,
+      email: `${stage}-numbered-reminder@test.example`,
+      stage
+    });
+    assert.equal(created.status, 200);
+    leads.push(created.json);
+  }
+  const recipients = leads.map(client => ({ clientId: client.id, email: client.email }));
+  const initial = await call('POST', '/api/mail/send', {
+    audience: 'selected',
+    recipients,
+    subject: 'Initial email',
+    body: 'Initial message',
+    replyToLast: false
+  });
+  assert.equal(initial.json.sent, 2);
+
+  const secondReminder = await call('POST', '/api/mail/send', {
+    audience: 'selected',
+    recipients: [recipients[1]],
+    subject: 'Follow-up',
+    body: 'First reminder',
+    replyToLast: true
+  });
+  assert.equal(secondReminder.json.sent, 1);
+  for (const client of leads) {
+    await call('PUT', `/api/clients/${client.id}`, { followUp: new Date(Date.now() - 60000).toISOString() });
+  }
+
+  const preview = await call('POST', '/api/mail/follow-up-preview', { audience: 'due_followups' });
+  assert.equal(preview.status, 200);
+  assert.equal(preview.json.recipients.find(item => item.clientId === leads[0].id).nextFollowUpNumber, 1);
+  assert.equal(preview.json.recipients.find(item => item.clientId === leads[1].id).nextFollowUpNumber, 2);
+
+  const campaign = await call('POST', '/api/mail/send', {
+    audience: 'due_followups',
+    replyToLast: true,
+    followUpMessages: {
+      1: { body: 'Reminder one for {{name}}' },
+      2: { body: 'Reminder two for {{name}}' }
+    }
+  });
+  assert.equal(campaign.status, 200);
+  assert.equal(campaign.json.total, 2);
+  assert.equal(campaign.json.sent, 2);
+  assert.deepEqual(campaign.json.followUpNumbers, [1, 2]);
+
+  for (const [index, followUpNumber] of [[0, 1], [1, 2]]) {
+    const activities = (await call('GET', `/api/clients/${leads[index].id}/activities`)).json
+      .filter(activity => activity.type === 'mail');
+    assert.equal(activities[0].followUpNumber, followUpNumber);
+    assert.match(activities[0].note, new RegExp(`Follow-up #${followUpNumber}:`));
+  }
 });
 
 test('mass mail can target selected clients across stages but excludes Red Zone and opt-outs', async () => {
@@ -289,6 +502,96 @@ test('mass mail can target selected clients across stages but excludes Red Zone 
   assert.equal(noneEligible.status, 400);
 });
 
+test('selected mass mail routes different reminders by each recipient thread number', async () => {
+  const leads = await Promise.all(['One', 'Two', 'Three', 'Four', 'Replied'].map((name, index) =>
+    call('POST', '/api/clients', {
+      name: `Reminder ${name}`,
+      email: `reminder-${name.toLowerCase()}@test.example`,
+      ...(index === 2 ? { stage: 'contacted' } : {})
+    })
+  ));
+  const recipients = leads.map(({ json }) => ({ clientId: json.id, email: json.email }));
+  const initial = await call('POST', '/api/mail/send', {
+    audience: 'selected',
+    recipients,
+    subject: 'Initial outreach',
+    body: 'Initial message',
+    replyToLast: false
+  });
+  assert.equal(initial.status, 200);
+  assert.equal(initial.json.sent, 5);
+
+  const sendPreviousReminders = async (leadIndexes, count) => {
+    for (let reminder = 0; reminder < count; reminder++) {
+      const sent = await call('POST', '/api/mail/send', {
+        audience: 'selected',
+        recipients: leadIndexes.map(index => recipients[index]),
+        subject: 'Follow-up',
+        body: `Already sent reminder ${reminder + 1}`,
+        replyToLast: true
+      });
+      assert.equal(sent.status, 200);
+      assert.equal(sent.json.sent, leadIndexes.length);
+    }
+  };
+  await sendPreviousReminders([1], 1);
+  await sendPreviousReminders([2], 2);
+  await sendPreviousReminders([3], 3);
+  const earlyPreview = await call('POST', '/api/mail/follow-up-preview', { recipients });
+  assert.equal(earlyPreview.json.recipients.find(item => item.clientId === leads[1].json.id).reason, 'follow-up is not due yet');
+  for (const { json: lead } of leads) {
+    await call('PUT', `/api/clients/${lead.id}`, { followUp: new Date(Date.now() - 60000).toISOString() });
+  }
+  await call('POST', `/api/clients/${leads[4].json.id}/activity`, { type: 'reply', note: 'Thanks, we are interested.' });
+
+  const preview = await call('POST', '/api/mail/follow-up-preview', { recipients });
+  assert.equal(preview.status, 200);
+  assert.equal(preview.json.recipients.find(item => item.clientId === leads[1].json.id).nextFollowUpNumber, 2);
+  assert.equal(preview.json.recipients.find(item => item.clientId === leads[2].json.id).nextFollowUpNumber, 3);
+  assert.equal(preview.json.recipients.find(item => item.clientId === leads[3].json.id).nextFollowUpNumber, 4);
+  assert.equal(preview.json.recipients.find(item => item.clientId === leads[4].json.id).reason, 'client replied');
+
+  const campaign = await call('POST', '/api/mail/send', {
+    audience: 'selected',
+    recipients,
+    replyToLast: true,
+    followUpMessages: {
+      2: { body: 'Second follow-up message for {{name}}' },
+      3: { body: 'Third follow-up message for {{name}}' },
+      4: { body: 'Fourth follow-up message for {{name}}' }
+    }
+  });
+  assert.equal(campaign.status, 200);
+  assert.equal(campaign.json.total, 5);
+  assert.equal(campaign.json.sent, 3);
+  assert.equal(campaign.json.skipped, 2, 'unconfigured reminder and replied client are skipped');
+  assert.deepEqual(campaign.json.followUpNumbers, [2, 3, 4]);
+
+  for (const [index, followUpNumber] of [[1, 2], [2, 3], [3, 4]]) {
+    const activities = (await call('GET', `/api/clients/${leads[index].json.id}/activities`)).json
+      .filter(activity => activity.type === 'mail');
+    assert.equal(activities[0].followUpNumber, followUpNumber);
+    assert.match(activities[0].note, new RegExp(`Follow-up #${followUpNumber}:`));
+  }
+  const skippedActivities = (await call('GET', `/api/clients/${leads[0].json.id}/activities`)).json
+    .filter(activity => activity.type === 'mail');
+  assert.equal(skippedActivities.length, 1);
+  const repliedActivities = (await call('GET', `/api/clients/${leads[4].json.id}/activities`)).json
+    .filter(activity => activity.type === 'mail');
+  assert.equal(repliedActivities.length, 1, 'no follow-up is sent after a reply');
+  const repeatedCampaign = await call('POST', '/api/mail/send', {
+    audience: 'selected',
+    recipients,
+    replyToLast: true,
+    followUpMessages: {
+      2: { body: 'Second follow-up message for {{name}}' },
+      3: { body: 'Third follow-up message for {{name}}' },
+      4: { body: 'Fourth follow-up message for {{name}}' }
+    }
+  });
+  assert.equal(repeatedCampaign.status, 400, 'recently sent reminders are not eligible to be sent again');
+});
+
 test('AI endpoints explain what is missing instead of crashing', async () => {
   const s = await call('GET', '/api/ai/status');
   assert.equal(s.json.configured, false);
@@ -313,6 +616,31 @@ test('communication opt-out blocks email and callback outcomes create a reminder
   assert.equal(reply.json.optedOut, true);
   assert.equal(reply.json.communicationStatus, 'opted_out');
   assert.equal((await call('POST', '/api/mail/send-one', { clientId: c.json.id })).status, 409);
+});
+
+test('due follow-up audience can create a sequence with distinct email content at each step', async () => {
+  const lead = await call('POST', '/api/clients', {
+    name: 'Due Sequence Test',
+    email: 'due-sequence@test.example',
+    followUp: new Date(Date.now() - 60000).toISOString()
+  });
+  const steps = [0, 2, 4, 6, 8].map((day, index) => ({
+    day,
+    subject: `Unique subject ${index + 1}`,
+    body: `Unique message body ${index + 1}`
+  }));
+  const created = await call('POST', '/api/sequences', {
+    audience: 'due_followups',
+    replyToLast: true,
+    steps
+  });
+
+  assert.equal(created.status, 200);
+  assert.equal(created.json.audience, 'due_followups');
+  assert.equal(created.json.status, 'paused');
+  assert.ok(created.json.total >= 1);
+  assert.ok(created.json.recipients.some(recipient => recipient.clientId === lead.json.id));
+  assert.deepEqual(created.json.steps.map(({ day, subject, body }) => ({ day, subject, body })), steps);
 });
 
 test('follow-up sequences support controls, edits, and stop on a reply or replied stage', async () => {

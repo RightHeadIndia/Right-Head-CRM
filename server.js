@@ -32,6 +32,32 @@ const loginFailures = new Map();
 const SESSION_MS = 12 * 60 * 60 * 1000;
 const COOKIE_NAME = 'crm_session';
 let massMailInProgress = false;
+const activeMailThreads = new Set();
+
+async function acquireMailThreadLock(clientId, email) {
+  const key = `${clientId}\n${String(email).toLowerCase()}`;
+  if (activeMailThreads.has(key)) return null;
+  activeMailThreads.add(key);
+  try {
+    const releaseDatabaseLock = usingPostgres
+      ? await tryAdvisoryLock(database, `righthead-crm-mail-thread:${key}`)
+      : null;
+    if (usingPostgres && !releaseDatabaseLock) {
+      activeMailThreads.delete(key);
+      return null;
+    }
+    return async () => {
+      try {
+        if (releaseDatabaseLock) await releaseDatabaseLock();
+      } finally {
+        activeMailThreads.delete(key);
+      }
+    };
+  } catch (error) {
+    activeMailThreads.delete(key);
+    throw error;
+  }
+}
 
 const app = express();
 if (process.env.CRM_TRUST_PROXY === '1' || process.env.NODE_ENV === 'production' || process.env.RENDER) app.set('trust proxy', 1);
@@ -197,6 +223,11 @@ function cleanClientInput(value, partial = false) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'client data must be an object' };
   const fields = { name: 200, company: 200, location: 200, phone: 50, email: 254, source: 500, notes: 6000, followUp: 40, lastReply: 6000 };
   const clean = {};
+  for (const field of ['emailShared', 'credentialsShared']) {
+    if (value[field] === undefined) continue;
+    if (typeof value[field] !== 'boolean') return { error: `${field} must be true or false` };
+    clean[field] = value[field];
+  }
   if (value.optedOut !== undefined) {
     if (typeof value.optedOut !== 'boolean') return { error: 'optedOut must be true or false' };
     clean.optedOut = value.optedOut;
@@ -241,16 +272,18 @@ function log(db, clientId, type, note, details) {
   const client = db.clients.find(item => item.id === clientId);
   db.activities.push({ id: uid(), clientId, ...(client ? { clientName: client.name } : {}), type, note: String(note || ''), ...(details ? { details } : {}), at: now() });
 }
-const CLIENT_AUDIT_FIELDS = ['name', 'company', 'location', 'phone', 'email', 'alternateEmails', 'source', 'stage', 'callStatus', 'communicationStatus', 'followUp', 'notes', 'optedOut', 'lastReply'];
+const CLIENT_AUDIT_FIELDS = ['name', 'company', 'location', 'phone', 'email', 'alternateEmails', 'source', 'stage', 'callStatus', 'communicationStatus', 'emailShared', 'credentialsShared', 'followUp', 'notes', 'optedOut', 'lastReply'];
 const CLIENT_AUDIT_LABELS = {
   name: 'Name', company: 'Company', location: 'Location', phone: 'Phone', email: 'Email',
   alternateEmails: 'Additional emails', source: 'Source', stage: 'Stage', callStatus: 'Call status',
-  communicationStatus: 'Communication status', followUp: 'Follow-up', notes: 'Notes',
+  communicationStatus: 'Communication status', emailShared: 'Email shared', credentialsShared: 'Credentials shared', followUp: 'Follow-up', notes: 'Notes',
   optedOut: 'Email opt-out', lastReply: 'Last reply'
 };
 function clientAuditSnapshot(client) {
   return Object.fromEntries(CLIENT_AUDIT_FIELDS.map(field => [
-    field, Array.isArray(client[field]) ? [...client[field]] : client[field] ?? ''
+    field, field === 'emailShared' || field === 'credentialsShared'
+      ? Boolean(client[field])
+      : Array.isArray(client[field]) ? [...client[field]] : client[field] ?? ''
   ]));
 }
 function clientAuditChanges(before, after, includeEmpty = false) {
@@ -275,10 +308,20 @@ function stopClientSequences(db, clientId, reason) {
   return changed;
 }
 
-// A process restart can interrupt a mass-mail request. Preserve that state so
-// the UI does not imply the campaign completed or invite a blind retry.
+// Migrate legacy statuses and recover interrupted campaigns during startup.
 const startupDb = load();
-let recoveredCampaign = false;
+let startupDataChanged = false;
+for (const client of startupDb.clients) {
+  if (client.callStatus === 'email_shared') {
+    client.emailShared = true;
+    client.callStatus = 'not_called';
+    startupDataChanged = true;
+  } else if (client.callStatus === 'credentials_shared') {
+    client.credentialsShared = true;
+    client.callStatus = 'not_called';
+    startupDataChanged = true;
+  }
+}
 for (const campaign of startupDb.campaigns) {
   const isLegacySequence = campaign.type === 'sequence' &&
     Array.isArray(campaign.steps) &&
@@ -297,7 +340,7 @@ for (const campaign of startupDb.campaigns) {
       updateSequenceNextRun(campaign);
     }
     campaign.updatedAt = now();
-    recoveredCampaign = true;
+    startupDataChanged = true;
   }
   const isPreviousSequence = campaign.type === 'sequence' &&
     Array.isArray(campaign.steps) &&
@@ -320,22 +363,22 @@ for (const campaign of startupDb.campaigns) {
       updateSequenceNextRun(campaign);
     }
     campaign.updatedAt = now();
-    recoveredCampaign = true;
+    startupDataChanged = true;
   }
   if (campaign.status === 'sending') {
     campaign.status = 'interrupted';
     campaign.finishedAt = now();
-    recoveredCampaign = true;
+    startupDataChanged = true;
   }
   if (campaign.type === 'sequence' && campaign.recipients?.some(r => r.status === 'sending')) {
     // The remote mail server may or may not have accepted the in-flight message
     // before the process stopped. Hold for review instead of risking a duplicate.
     campaign.status = 'paused';
     campaign.recipients.forEach(r => { if (r.status === 'sending') { r.status = 'review'; r.stopReason = 'delivery uncertain after restart'; } });
-    campaign.updatedAt = now(); recoveredCampaign = true;
+    campaign.updatedAt = now(); startupDataChanged = true;
   }
 }
-if (recoveredCampaign) {
+if (startupDataChanged) {
   save(startupDb);
   if (usingPostgres) await flush(database);
 }
@@ -394,6 +437,8 @@ app.post('/api/clients', (req, res) => {
     alternateEmails: b.alternateEmails || [],
     optedOut: b.optedOut || false,
     communicationStatus: b.communicationStatus || (b.optedOut ? 'opted_out' : 'not_contacted'),
+    emailShared: b.emailShared || false,
+    credentialsShared: b.credentialsShared || false,
     source: b.source || '',
     notes: b.notes || '',
     stage: b.stage || 'new',
@@ -440,7 +485,9 @@ app.put('/api/clients/:id', async (req, res, next) => {
     'followUp',
     'lastReply',
     'optedOut',
-    'communicationStatus'
+    'communicationStatus',
+    'emailShared',
+    'credentialsShared'
   ];
 
   fields.forEach(field => {
@@ -536,6 +583,83 @@ app.get('/api/history', (req, res) => {
     ].some(value => String(value ?? '').toLowerCase().includes(query)))
     .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
   res.json({ activities: activities.slice(0, limit), total: activities.length, limit });
+});
+
+app.get('/api/notifications', (req, res) => {
+  const db = load();
+  const notifications = [];
+  const clientsById = new Map(db.clients.map(client => [client.id, client]));
+  const startToday = new Date();
+  startToday.setHours(0, 0, 0, 0);
+  const endToday = new Date();
+  endToday.setHours(23, 59, 59, 999);
+  const recentReplyCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+  for (const client of db.clients) {
+    const dueAt = Date.parse(client.followUp || '');
+    if (!Number.isFinite(dueAt) || dueAt > endToday.getTime() || ['onboarded', 'rejected'].includes(client.stage)) continue;
+    notifications.push({
+      id: `followup:${client.id}:${client.followUp}`,
+      type: 'followup',
+      title: dueAt < startToday.getTime() ? 'Follow-up overdue' : 'Follow-up due today',
+      detail: client.name || client.company || 'Client reminder',
+      at: client.followUp,
+      clientId: client.id
+    });
+  }
+
+  for (const task of db.tasks) {
+    const dueAt = Date.parse(task.dueAt || '');
+    if (task.done || !Number.isFinite(dueAt) || dueAt > endToday.getTime()) continue;
+    const client = clientsById.get(task.clientId);
+    notifications.push({
+      id: `task:${task.id}:${task.dueAt}`,
+      type: 'task',
+      title: dueAt < startToday.getTime() ? 'Task overdue' : 'Task due today',
+      detail: `${task.title || 'Untitled task'}${client ? ` · ${client.name}` : ''}`,
+      at: task.dueAt,
+      taskId: task.id
+    });
+  }
+
+  const latestReplies = new Map();
+  for (const activity of db.activities) {
+    const activityAt = Date.parse(activity.at);
+    if (activity.type !== 'reply' || !Number.isFinite(activityAt) || activityAt < recentReplyCutoff) continue;
+    const prior = latestReplies.get(activity.clientId);
+    if (!prior || activityAt > Date.parse(prior.at)) latestReplies.set(activity.clientId, activity);
+  }
+  for (const activity of latestReplies.values()) {
+    const client = clientsById.get(activity.clientId);
+    if (!client) continue;
+    notifications.push({
+      id: `reply:${activity.id}`,
+      type: 'reply',
+      title: 'Client replied',
+      detail: `${client.name || client.company || 'Client'}${activity.note ? ` · ${activity.note}` : ''}`,
+      at: activity.at,
+      clientId: client.id
+    });
+  }
+
+  for (const campaign of db.campaigns) {
+    const reviewCount = campaign.recipients?.filter(recipient => recipient.status === 'review').length || 0;
+    if (!(campaign.failed > 0 || campaign.status === 'interrupted' || reviewCount > 0)) continue;
+    const issues = [];
+    if (campaign.failed > 0) issues.push(`${campaign.failed} failed`);
+    if (reviewCount) issues.push(`${reviewCount} delivery status${reviewCount === 1 ? '' : 'es'} need review`);
+    if (campaign.status === 'interrupted') issues.push('interrupted');
+    notifications.push({
+      id: `campaign:${campaign.id}:${campaign.failed || 0}:${reviewCount}:${campaign.status}`,
+      type: 'campaign',
+      title: 'Campaign needs attention',
+      detail: `${campaign.subject || 'Email campaign'} · ${issues.join(', ')}`,
+      at: campaign.updatedAt || campaign.finishedAt || campaign.at || now()
+    });
+  }
+
+  notifications.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  res.json(notifications.slice(0, 100));
 });
 
 // Add a note / record a client reply. type: note | reply | call
@@ -703,6 +827,8 @@ app.post('/api/clients/import', (req, res) => {
       alternateEmails: r.alternateEmails || [],
       optedOut: false,
       communicationStatus: 'not_contacted',
+      emailShared: r.emailShared || false,
+      credentialsShared: r.credentialsShared || false,
       source: r.source || 'import',
       notes: r.notes || '',
       stage: STAGES.includes(raw.stage) ? raw.stage : 'new',
@@ -1016,9 +1142,23 @@ function emailHtml(text) {
   return `<div style="font-family:Arial,sans-serif;line-height:1.5">${message}</div><div style="margin-top:20px"><a href="https://rightheadindia.in" style="text-decoration:none"><img src="https://i0.wp.com/rightheadindia.in/wp-content/uploads/2021/10/footer-logo.png?fit=139%2C75&amp;ssl=1" alt="Right Head" width="139" height="75" style="display:block;width:139px;height:75px;border:0"></a></div>`;
 }
 
+function followUpDueToday(client) {
+  if (!client.followUp || ['onboarded', 'rejected'].includes(client.stage)) return false;
+  const endToday = new Date();
+  endToday.setHours(23, 59, 59, 999);
+  return new Date(client.followUp) <= endToday;
+}
+
+function mailStage(client) {
+  return STAGES.includes(client?.stage) ? client.stage : 'new';
+}
+
 function audience(db, audienceKey) {
   let list = db.clients.filter(c => emailAddresses(c).length && c.stage !== 'rejected' && !c.optedOut && c.communicationStatus !== 'opted_out');
   if (audienceKey === 'all' || audienceKey === 'selected') return list;
+  if (audienceKey === 'due_followups') {
+    return list.filter(followUpDueToday);
+  }
   return list.filter(c => c.stage === audienceKey);
 }
 function resolveMailTargets(db, audienceKey, options = {}) {
@@ -1048,7 +1188,11 @@ function resolveMailTargets(db, audienceKey, options = {}) {
 }
 
 app.get('/api/mail/audience/:key', (req, res) => {
-  res.json({ count: audience(load(), req.params.key).length });
+  const eligible = audience(load(), req.params.key);
+  if (req.params.key !== 'due_followups') return res.json({ count: eligible.length });
+  const byStage = Object.fromEntries(STAGES.filter(stage => !['onboarded', 'rejected'].includes(stage)).map(stage => [stage, 0]));
+  eligible.forEach(client => { byStage[mailStage(client)]++; });
+  res.json({ count: eligible.length, byStage });
 });
 
 app.get('/api/campaigns', (req, res) => {
@@ -1072,6 +1216,23 @@ app.get('/api/mail/thread', (req, res) => {
   });
 });
 
+app.post('/api/mail/follow-up-preview', (req, res) => {
+  const db = load();
+  const audienceKey = req.body?.audience === 'due_followups' ? 'due_followups' : 'selected';
+  const requested = req.body?.recipients;
+  if (audienceKey === 'selected' && (!Array.isArray(requested) || !requested.length)) {
+    return res.status(400).json({ error: 'Select at least one client email address.' });
+  }
+  const resolved = resolveMailTargets(db, audienceKey, audienceKey === 'selected' ? { recipients: requested } : {});
+  if (resolved.error) return res.status(400).json({ error: resolved.error });
+  const recipients = resolved.targets.map(({ client, email }) => ({
+    clientId: client.id,
+    clientName: client.name || client.company || email,
+    ...numberedFollowUpStatus(db, client, email, { 1: true, 2: true, 3: true, 4: true })
+  }));
+  res.json({ recipients, ignored: audienceKey === 'selected' ? requested.length - recipients.length : 0 });
+});
+
 const FINAL_REPLY_WAIT_DAYS = 3;
 function updateSequenceNextRun(campaign) {
   const dates = (campaign.recipients || [])
@@ -1092,7 +1253,7 @@ function validSequenceSteps(steps) {
 app.post('/api/sequences', (req, res) => {
   const b = req.body || {};
   const key = b.audience || 'all';
-  if (!['all', 'selected', ...STAGES.filter(stage => stage !== 'rejected')].includes(key)) return res.status(400).json({ error: 'unknown audience' });
+  if (!['all', 'selected', 'due_followups', ...STAGES.filter(stage => stage !== 'rejected')].includes(key)) return res.status(400).json({ error: 'unknown audience' });
   if (!validSequenceSteps(b.steps)) return res.status(400).json({ error: 'Provide five personalized sequence emails for the initial email and four 48-hour follow-ups.' });
   if (b.replyToLast !== undefined && typeof b.replyToLast !== 'boolean') return res.status(400).json({ error: 'replyToLast must be true or false' });
   if (key === 'selected' && !((Array.isArray(b.recipients) && b.recipients.length) || (Array.isArray(b.clientIds) && b.clientIds.length))) {
@@ -1414,6 +1575,28 @@ function mailThreadContext(db, clientId, email) {
     references
   };
 }
+function numberedFollowUpStatus(db, client, email, configuredMessages) {
+  const context = mailThreadContext(db, client.id, email);
+  let reason = '';
+  if (client.optedOut || client.communicationStatus === 'opted_out') reason = 'opted out';
+  else if (client.communicationStatus === 'replied' || client.stage === 'replied') reason = 'client replied';
+  else if (['onboarded', 'rejected'].includes(client.stage)) reason = 'client is in a closed stage';
+  else if (!context.hasHistory) reason = 'no previous email thread';
+  else if (context.nextFollowUpNumber < 1 || context.nextFollowUpNumber > 4) reason = 'no follow-up remains';
+  else if (!configuredMessages[context.nextFollowUpNumber]) reason = `no message configured for reminder #${context.nextFollowUpNumber}`;
+  else {
+    const dueAt = Date.parse(client.followUp || '');
+    if (!Number.isFinite(dueAt)) reason = 'no follow-up date is scheduled';
+    else if (dueAt > Date.now()) reason = 'follow-up is not due yet';
+  }
+  return {
+    email,
+    nextFollowUpNumber: context.hasHistory ? context.nextFollowUpNumber : 0,
+    dueAt: client.followUp || '',
+    eligible: !reason,
+    reason
+  };
+}
 function createMailMessageId() {
   return `<${crypto.randomBytes(16).toString('hex')}@rightheadindia.in>`;
 }
@@ -1675,9 +1858,9 @@ app.post('/api/mail/test', asyncRoute(async (req, res) => {
 
 
 app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
-  const db = load();
+  let db = load();
   const { clientId, email: requestedEmail, subject = '', body = '', replyToLast = true } = req.body || {};
-  const c = db.clients.find(x => x.id === clientId);
+  let c = db.clients.find(x => x.id === clientId);
 
   if (!c) return res.status(404).json({ error: 'client not found' });
   const availableEmails = emailAddresses(c);
@@ -1695,6 +1878,14 @@ app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
   }
   if (typeof replyToLast !== 'boolean') return res.status(400).json({ error: 'replyToLast must be true or false' });
 
+  const releaseThreadLock = await acquireMailThreadLock(c.id, email);
+  if (!releaseThreadLock) return res.status(409).json({ error: 'An email is already being sent in this client thread. Wait and try again.' });
+  try {
+  db = load();
+  c = db.clients.find(x => x.id === clientId);
+  if (!c) return res.status(404).json({ error: 'client not found' });
+  if (!emailAddresses(c).some(address => sameEmail(address, email))) return res.status(409).json({ error: 'This email address is no longer saved for the client.' });
+  if (c.optedOut || c.communicationStatus === 'opted_out') return res.status(409).json({ error: 'this client opted out of email' });
   const cleanSubject = subject.replace(/[\r\n]+/g, ' ').trim();
   const threadContext = mailThreadContext(db, c.id, email);
   const isFollowUp = replyToLast && threadContext.hasHistory;
@@ -1778,6 +1969,7 @@ app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
   }
 
   save(latest);
+  if (usingPostgres) await flush(database);
   res.json({
     ok: true,
     simulated: !configured,
@@ -1786,29 +1978,65 @@ app.post('/api/mail/send-one', asyncRoute(async (req, res) => {
     followUpNumber: isFollowUp ? threadContext.nextFollowUpNumber : 0,
     clientDeleted: !current
   });
+  } finally {
+    await releaseThreadLock();
+  }
 }));
 
 app.post('/api/mail/send', asyncRoute(async (req, res) => {
   const db = load();
+  const request = req.body || {};
   const {
     audience: key = 'all',
     subject = '',
     body = '',
     dryRun,
     replyToLast = false
-  } = req.body || {};
+  } = request;
+  const stageMessages = request.stageMessages;
+  const followUpMessages = request.followUpMessages;
+  const useNumberedFollowUpMessages = followUpMessages !== undefined;
+  const useStageMessages = key === 'due_followups' && stageMessages !== undefined;
+  const validStages = STAGES.filter(stage => !['onboarded', 'rejected'].includes(stage));
 
-  if (typeof subject !== 'string' || typeof body !== 'string' ||
+  if (useNumberedFollowUpMessages) {
+    if (!['selected', 'due_followups'].includes(key)) return res.status(400).json({ error: 'Numbered follow-up messages require selected clients or due follow-up reminders.' });
+    if (useStageMessages) return res.status(400).json({ error: 'Choose numbered reminders or stage-specific reminders, not both.' });
+    if (replyToLast !== true) return res.status(400).json({ error: 'Numbered follow-up messages must continue the existing email thread.' });
+    if (!followUpMessages || typeof followUpMessages !== 'object' || Array.isArray(followUpMessages) ||
+        Object.keys(followUpMessages).some(number => !/^[1-4]$/.test(number))) {
+      return res.status(400).json({ error: 'followUpMessages must contain reminder numbers from 1 to 4.' });
+    }
+    if (!Object.keys(followUpMessages).length) return res.status(400).json({ error: 'Provide a message for at least one reminder number.' });
+    for (const [number, message] of Object.entries(followUpMessages)) {
+      if (!message || typeof message.body !== 'string' || !message.body.trim()) {
+        return res.status(400).json({ error: `A message is required for reminder #${number}.` });
+      }
+      if (message.body.length > 20000) return res.status(400).json({ error: `Reminder #${number} message is too long.` });
+    }
+  } else if (useStageMessages) {
+    if (!stageMessages || typeof stageMessages !== 'object' || Array.isArray(stageMessages) ||
+        Object.keys(stageMessages).some(stage => !validStages.includes(stage))) {
+      return res.status(400).json({ error: 'stageMessages must contain valid follow-up stages.' });
+    }
+    for (const [stage, message] of Object.entries(stageMessages)) {
+      if (!message || typeof message.subject !== 'string' || typeof message.body !== 'string' ||
+          !message.subject.trim() || !message.body.trim()) {
+        return res.status(400).json({ error: `A subject and message are required for the ${stage} stage.` });
+      }
+      if (message.subject.length > 300 || message.body.length > 20000) {
+        return res.status(400).json({ error: `The ${stage} stage subject or message is too long.` });
+      }
+    }
+  } else if (typeof subject !== 'string' || typeof body !== 'string' ||
       !subject.trim() || !body.trim()) {
     return res.status(400).json({ error: 'subject and message are required' });
-  }
-
-  if (subject.length > 300 || body.length > 20000) {
+  } else if (subject.length > 300 || body.length > 20000) {
     return res.status(400).json({ error: 'subject or message is too long' });
   }
   if (typeof replyToLast !== 'boolean') return res.status(400).json({ error: 'replyToLast must be true or false' });
 
-  if (!['all', 'selected', ...STAGES.filter(stage => stage !== 'rejected')].includes(key)) {
+  if (!['all', 'selected', 'due_followups', ...STAGES.filter(stage => stage !== 'rejected')].includes(key)) {
     return res.status(400).json({ error: 'unknown audience' });
   }
 
@@ -1823,11 +2051,33 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
     });
   }
 
-  const cleanSubject = subject.replace(/[\r\n]+/g, ' ').trim();
   const resolved = resolveMailTargets(db, key, { clientIds, recipients });
   if (resolved.error) return res.status(400).json({ error: resolved.error });
   const list = resolved.targets.map(({ client, email }) => ({ ...client, mailTo: email }));
   if (key === 'selected' && !list.length) return res.status(400).json({ error: 'No selected clients have an eligible email address. Red Zone and opted-out clients cannot be mailed.' });
+  if (useStageMessages) {
+    const missingStages = [...new Set(list.map(client => mailStage(client)).filter(stage => !stageMessages[stage]))];
+    if (missingStages.length) return res.status(400).json({ error: `Add a subject and message for each stage with due clients: ${missingStages.join(', ')}.` });
+  }
+  const cleanFollowUpMessages = useNumberedFollowUpMessages
+    ? Object.fromEntries(Object.entries(followUpMessages).map(([number, message]) => [number, { body: message.body.trim() }]))
+    : null;
+  if (useNumberedFollowUpMessages && !list.some(client =>
+    numberedFollowUpStatus(db, client, client.mailTo, cleanFollowUpMessages).eligible
+  )) {
+    return res.status(400).json({ error: 'None of the selected clients has a due, unreplied follow-up with a configured message. No emails were sent.' });
+  }
+  const cleanSubject = useNumberedFollowUpMessages
+    ? `Follow-up reminders by number (#${Object.keys(cleanFollowUpMessages).join(', #')})`
+    : useStageMessages
+      ? `Follow-up reminders by stage (${[...new Set(list.map(mailStage))].join(', ')})`
+    : subject.replace(/[\r\n]+/g, ' ').trim();
+  const cleanStageMessages = useStageMessages
+    ? Object.fromEntries(Object.entries(stageMessages).map(([stage, message]) => [
+      stage,
+      { subject: message.subject.replace(/[\r\n]+/g, ' ').trim(), body: message.body.trim() }
+    ]))
+    : null;
   const s = db.settings.smtp;
   const smtpConfigured = Boolean(s.host && s.user && s.pass);
   const useGmail = gmailConfigured();
@@ -1851,6 +2101,8 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
       errors: [],
       simulated: !!simulate,
       replyToLast,
+      ...(useNumberedFollowUpMessages ? { followUpNumbers: Object.keys(cleanFollowUpMessages).map(Number) } : {}),
+      ...(useStageMessages ? { stageSubjects: Object.fromEntries(Object.entries(cleanStageMessages).map(([stage, message]) => [stage, message.subject])) } : {}),
       status: list.length ? 'sending' : 'complete',
       finishedAt: list.length ? '' : now()
     };
@@ -1865,10 +2117,39 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
     const errors = [];
 
     for (const c of list) {
+      const releaseThreadLock = useNumberedFollowUpMessages
+        ? await acquireMailThreadLock(c.id, c.mailTo)
+        : null;
+      if (useNumberedFollowUpMessages && !releaseThreadLock) {
+        skipped++;
+        updateRecords(database, ({ get, set }) => {
+          const running = get('campaigns', camp.id);
+          if (!running) return;
+          running.sent = sent;
+          running.failed = failed;
+          running.skipped = skipped;
+          if (sent + failed + skipped >= list.length) {
+            running.status = 'complete';
+            running.finishedAt = now();
+          }
+          set('campaigns', running);
+        });
+        continue;
+      }
+      try {
       const recipient = readRecord(database, 'clients', c.id);
+      const recipientDb = load();
+      const threadContext = recipient ? mailThreadContext(recipientDb, recipient.id, c.mailTo) : null;
+      const followUpStatus = useNumberedFollowUpMessages && recipient
+        ? numberedFollowUpStatus(recipientDb, recipient, c.mailTo, cleanFollowUpMessages)
+        : null;
+      const numberedMessage = useNumberedFollowUpMessages && followUpStatus?.eligible
+        ? cleanFollowUpMessages[followUpStatus.nextFollowUpNumber]
+        : null;
       const eligible = recipient && emailAddresses(recipient).some(email => sameEmail(email, c.mailTo)) && !recipient.optedOut && recipient.communicationStatus !== 'opted_out' &&
         recipient.stage !== 'rejected' &&
-        (key === 'all' || key === 'selected' || recipient.stage === key);
+        (key === 'all' || key === 'selected' || recipient.stage === key || (key === 'due_followups' && followUpDueToday(recipient) && (!useStageMessages || cleanStageMessages[mailStage(recipient)]))) &&
+        (!useNumberedFollowUpMessages || numberedMessage);
 
       if (!eligible) {
         skipped++;
@@ -1894,15 +2175,17 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
 
       let delivered = false;
       let mailFields = null;
-      const threadContext = mailThreadContext(load(), recipient.id, c.mailTo);
       const isFollowUp = replyToLast && threadContext.hasHistory;
       const threading = makeMailThreading(threadContext, createMailMessageId(), isFollowUp);
-      const personalizedSubject = isFollowUp ? replySubject(threadContext.threadSubject) : fill(cleanSubject, { ...recipient, email: c.mailTo });
+      const message = useNumberedFollowUpMessages
+        ? numberedMessage
+        : useStageMessages ? cleanStageMessages[mailStage(recipient)] : { subject: cleanSubject, body };
+      const personalizedSubject = isFollowUp ? replySubject(threadContext.threadSubject) : fill(message.subject, { ...recipient, email: c.mailTo });
 
       try {
         if (!simulate) {
           const mailClient = { ...recipient, email: c.mailTo };
-          const personalizedBody = fill(body, mailClient);
+          const personalizedBody = fill(message.body, mailClient);
           let delivery;
 
           if (useGmail && !simulate) {
@@ -1989,7 +2272,7 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
             ...mailFields
           });
 
-          if (latestRecipient.stage === 'new') {
+          if (mailStage(latestRecipient) === 'new') {
             latestRecipient.stage = 'contacted';
           }
           latestRecipient.communicationStatus = 'contacted';
@@ -1999,6 +2282,10 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
           set('clients', latestRecipient);
         }
       });
+      if (useNumberedFollowUpMessages && usingPostgres) await flush(database);
+      } finally {
+        if (releaseThreadLock) await releaseThreadLock();
+      }
     }
 
     const completed = load().campaigns.find(x => x.id === camp.id) || camp;
