@@ -118,6 +118,8 @@ test('email and credentials sharing flags are separate from phone call outcomes'
   assert.equal(created.json.emailShared, true);
   assert.equal(created.json.credentialsShared, false);
   assert.equal(created.json.callStatus, 'connected');
+  const firstDashboard = await call('GET', '/api/dashboard');
+  assert.ok(firstDashboard.json.emailSharedClients.some(client => client.id === created.json.id));
 
   const updated = await call('PUT', `/api/clients/${created.json.id}`, {
     emailShared: false,
@@ -127,6 +129,12 @@ test('email and credentials sharing flags are separate from phone call outcomes'
   assert.equal(updated.json.emailShared, false);
   assert.equal(updated.json.credentialsShared, true);
   assert.equal(updated.json.callStatus, 'connected');
+  const dashboard = await call('GET', '/api/dashboard');
+  const clients = (await call('GET', '/api/clients')).json;
+  assert.equal(dashboard.json.emailShared, clients.filter(client => client.emailShared).length);
+  assert.equal(dashboard.json.credentialsShared, clients.filter(client => client.credentialsShared).length);
+  assert.ok(!dashboard.json.emailSharedClients.some(client => client.id === created.json.id));
+  assert.ok(dashboard.json.credentialsSharedClients.some(client => client.id === created.json.id));
 
   const invalid = await call('PUT', `/api/clients/${created.json.id}`, { credentialsShared: 'yes' });
   assert.equal(invalid.status, 400);
@@ -138,6 +146,9 @@ test('dashboard and report stage and call counts cover all client records', asyn
   assert.equal(dashboard.status, 200);
   assert.equal(Object.values(dashboard.json.stages).reduce((sum, count) => sum + count, 0), dashboard.json.total);
   assert.equal(Object.values(dashboard.json.calls).reduce((sum, count) => sum + count, 0), dashboard.json.total);
+  const clients = (await call('GET', '/api/clients')).json;
+  assert.equal(dashboard.json.emailShared, clients.filter(client => client.emailShared).length);
+  assert.equal(dashboard.json.credentialsShared, clients.filter(client => client.credentialsShared).length);
 
   const report = await call('GET', '/api/reports?days=30');
   assert.equal(report.status, 200);

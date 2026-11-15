@@ -238,8 +238,16 @@ async function renderDashboard() {
     <div class="stat blue" onclick="go('replied')"><b>${d.stages.replied}</b><span>Replies / revert back</span></div>
     <div class="stat green" onclick="go('onboarded')"><b>${d.stages.onboarded}</b><span>Onboarded</span></div>
     <div class="stat red" onclick="go('redzone')"><b>${d.stages.rejected}</b><span>Red zone (said no)</span></div>
+    <div class="stat blue" onclick="go('clients')"><b>${d.emailShared}</b><span>Clients with email shared</span></div>
+    <div class="stat green" onclick="go('clients')"><b>${d.credentialsShared}</b><span>Clients with credentials shared</span></div>
   </div>
   <div class="grid cols">
+    <div class="panel blue"><h3>Clients with Email Shared (${d.emailShared})</h3>
+      ${listItems(d.emailSharedClients, c => `Shared · updated ${fmt(c.updatedAt)}`)}
+    </div>
+    <div class="panel green"><h3>Clients with Credentials Shared (${d.credentialsShared})</h3>
+      ${listItems(d.credentialsSharedClients, c => `Shared · updated ${fmt(c.updatedAt)}`)}
+    </div>
     <div class="panel"><h3>Calling Status <a onclick="go('calls')">view all</a></h3>
       ${Object.keys(CALLS).map(k => `<div class="bar"><label>${CALLS[k]}</label><div class="track"><div class="fill" style="width:${d.calls[k] / maxCall * 100}%"></div></div><b>${d.calls[k]}</b></div>`).join('')}
     </div>

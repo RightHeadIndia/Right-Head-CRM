@@ -880,6 +880,10 @@ app.get('/api/dashboard', (req, res) => {
 
   res.json({
     total: cs.length,
+    emailShared: cs.filter(c => c.emailShared === true).length,
+    credentialsShared: cs.filter(c => c.credentialsShared === true).length,
+    emailSharedClients: cs.filter(c => c.emailShared === true).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6),
+    credentialsSharedClients: cs.filter(c => c.credentialsShared === true).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6),
     stages,
     calls,
     communication,
