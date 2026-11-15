@@ -8,6 +8,7 @@ const nodemailer = require('nodemailer');
 const { backup: sqliteBackup } = require('node:sqlite');
 const { openDatabase: openSQLiteDatabase, readDatabase: readSQLiteDatabase, writeDatabase: writeSQLiteDatabase, readRecord: readSQLiteRecord, updateRecords: updateSQLiteRecords } = require('./lib/database');
 const { openDatabase: openPostgresDatabase, readDatabase: readPostgresDatabase, writeDatabase: writePostgresDatabase, readRecord: readPostgresRecord, updateRecords: updatePostgresRecords, flush, closeDatabase, tryAdvisoryLock } = require('./lib/database-postgres');
+const { waitForPostgresWrites } = require('./lib/postgres-response-barrier');
 
 const PORT = process.env.PORT || 3000;
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
@@ -79,22 +80,7 @@ app.use((req, res, next) => {
 // Ensure queued PostgreSQL writes have committed before a response is sent.
 app.use((req, res, next) => {
   if (!usingPostgres) return next();
-  const originalJson = res.json.bind(res);
-  const originalSend = res.send.bind(res);
-  res.json = body => {
-    flush(database).then(() => originalJson(body)).catch(err => {
-      console.error('CRM PostgreSQL write failed:', err.message);
-      if (!res.headersSent) originalJson({ error: 'Database write failed. Please retry after the database connection is restored.' });
-    });
-    return res;
-  };
-  res.send = body => {
-    flush(database).then(() => originalSend(body)).catch(err => {
-      console.error('CRM PostgreSQL write failed:', err.message);
-      if (!res.headersSent) originalJson({ error: 'Database operation failed.' });
-    });
-    return res;
-  };
+  waitForPostgresWrites(res, () => flush(database));
   next();
 });
 
@@ -2310,7 +2296,7 @@ app.use((error, req, res, next) => {
 
   console.error('CRM request failed:', error.message);
 
-  const status = error.code === 'CRM_CONCURRENT_UPDATE' ? 409 : 500;
+  const status = error.code === 'CRM_CONCURRENT_UPDATE' ? 409 : error.code === 'CRM_DATABASE_RECOVERING' ? 503 : 500;
 
   if (req.path.startsWith('/api/')) {
     return res.status(status).json({

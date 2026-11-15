@@ -96,7 +96,7 @@ When you use an AI button, the required client details (name, company, contact i
 - Every record and setting is encrypted at rest with AES-256-GCM using `CRM_ENCRYPTION_KEY`, which is never stored in the database. `GROQ_API_KEY` and other provider keys set in the environment stay outside the database; keys entered in Settings are encrypted with the CRM settings.
 - **Settings & Import > Download backup** regularly and store it securely. PostgreSQL mode exports a JSON backup of the CRM data; treat it as sensitive because the export contains decrypted record values. SQLite compatibility mode downloads an encrypted SQLite backup.
 - Behind an HTTPS reverse proxy set `CRM_TRUST_PROXY=1`. Never commit `.env`; `.gitignore` excludes it. Configure environment variables in Render rather than uploading `.env`.
-- If two people edit the same client at once, the later save gets a "changed by someone else" message instead of overwriting.
+- If two people edit the same client at once, the later save gets a "changed by someone else" message instead of overwriting. After a PostgreSQL conflict, the server refreshes its cached records so later requests can continue.
 
 ## How it is optimized
 - Encrypted records are decrypted once at startup and served from a process cache.
