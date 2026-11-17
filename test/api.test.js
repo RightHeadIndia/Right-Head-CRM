@@ -7,6 +7,8 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 const PASSWORD = 'test-password-123456';
+const CRM_PASSWORD = 'crm-login-password-123456';
+const TALENT_PASSWORD = 'talent-login-password-123456';
 let proc, base, cookie = '';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'crm-api-'));
 
@@ -21,7 +23,7 @@ test.before(async () => {
   const port = 20000 + Math.floor(Math.random() * 20000);
   base = `http://127.0.0.1:${port}`;
   proc = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT: String(port), APP_PASSWORD: PASSWORD, CRM_ENCRYPTION_KEY: crypto.randomBytes(32).toString('base64'), CRM_DB_FILE: path.join(dir, 'crm.sqlite'), GROQ_API_KEY: '', AI_API_KEY: '' },
+    env: { ...process.env, PORT: String(port), APP_PASSWORD: PASSWORD, CRM_LOGIN_PASSWORD: CRM_PASSWORD, TALENT_LOGIN_PASSWORD: TALENT_PASSWORD, CRM_ENCRYPTION_KEY: crypto.randomBytes(32).toString('base64'), CRM_DB_FILE: path.join(dir, 'crm.sqlite'), GROQ_API_KEY: '', AI_API_KEY: '' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   await new Promise((resolve, reject) => {
@@ -34,19 +36,73 @@ test.after(() => { if (proc) proc.kill(); });
 
 test('everything requires login', async () => {
   assert.equal((await call('GET', '/api/clients', undefined, { nocookie: true })).status, 401);
+  assert.equal((await call('GET', '/api/candidates', undefined, { nocookie: true })).status, 401);
   const page = await call('GET', '/', undefined, { nocookie: true });
-  assert.equal(page.status, 302);
+  assert.equal(page.status, 200);
+  assert.match(page.text, /Talent Acquisition/);
+  assert.match(page.text, /HR Health Check/);
+  assert.equal((await call('GET', '/portal.css', undefined, { nocookie: true })).status, 200);
+  const theme = await call('GET', '/theme.js', undefined, { nocookie: true });
+  assert.equal(theme.status, 200);
+  assert.match(theme.headers.get('content-type'), /javascript/);
+  const talent = await call('GET', '/talent.html', undefined, { nocookie: true });
+  assert.equal(talent.status, 302);
+  assert.equal(talent.headers.get('location'), '/login.html?product=talent&next=%2Ftalent.html');
   assert.equal((await call('GET', '/login.html', undefined, { nocookie: true })).status, 200);
+  assert.match((await call('GET', '/login.html', undefined, { nocookie: true })).text, /type="email"/);
+  assert.deepEqual((await call('GET', '/api/auth/session', undefined, { nocookie: true })).json.loginEmails, {
+    crm: 'contact@righthead.in',
+    talent: 'avvni.sharrma@righthead.in'
+  });
   assert.equal((await call('GET', '/api/backup', undefined, { nocookie: true })).status, 401);
   assert.equal((await call('GET', '/api/notifications', undefined, { nocookie: true })).status, 401);
 });
 
 test('wrong password is refused, right password signs in', async () => {
-  assert.equal((await call('POST', '/api/auth/login', { password: 'nope' }, { nocookie: true })).status, 401);
-  const ok = await call('POST', '/api/auth/login', { password: PASSWORD }, { nocookie: true });
+  assert.equal((await call('POST', '/api/auth/login', { product: 'crm', email: 'contact@righthead.in', password: 'nope' }, { nocookie: true })).status, 401);
+  assert.equal((await call('POST', '/api/auth/login', { product: 'crm', email: 'wrong@righthead.in', password: CRM_PASSWORD }, { nocookie: true })).status, 401);
+  assert.equal((await call('POST', '/api/auth/login', { product: 'talent', email: 'contact@righthead.in', password: CRM_PASSWORD }, { nocookie: true })).status, 401);
+  const ok = await call('POST', '/api/auth/login', { product: 'crm', email: 'contact@righthead.in', password: CRM_PASSWORD }, { nocookie: true });
   assert.equal(ok.status, 200);
   cookie = ok.headers.get('set-cookie').split(';')[0];
   assert.equal((await call('GET', '/api/auth/session')).json.authenticated, true);
+  assert.equal((await call('GET', '/api/auth/session')).json.product, 'crm');
+  assert.match((await call('GET', '/')).text, /Talent Acquisition/);
+  assert.match((await call('GET', '/index.html')).text, /id="view"/);
+  assert.equal((await call('GET', '/api/candidates')).status, 401);
+  assert.equal((await call('GET', '/talent.html')).headers.get('location'), '/login.html?product=talent&next=%2Ftalent.html');
+});
+
+test('candidate pipeline supports validation, updates, and deletion', async () => {
+  const talentLogin = await call('POST', '/api/auth/login', {
+    product: 'talent', email: 'avvni.sharrma@righthead.in', password: TALENT_PASSWORD
+  });
+  assert.equal(talentLogin.status, 200);
+  cookie = talentLogin.headers.get('set-cookie').split(';')[0];
+  assert.equal((await call('GET', '/talent.html')).status, 200);
+  assert.equal((await call('GET', '/api/clients')).status, 401);
+  assert.equal((await call('POST', '/api/candidates', { role: 'Designer' })).status, 400);
+  assert.equal((await call('POST', '/api/candidates', { name: 'Asha', role: 'Designer', email: 'bad', stage: 'Unknown' })).status, 400);
+  const created = await call('POST', '/api/candidates', {
+    name: ' Asha Sharma ', role: 'Product Designer', email: 'asha@example.com', source: 'Referral', notes: 'Portfolio received'
+  });
+  assert.equal(created.status, 200);
+  assert.equal(created.json.name, 'Asha Sharma');
+  assert.equal(created.json.stage, 'Applied');
+  assert.ok(created.json.id);
+
+  const updated = await call('PUT', `/api/candidates/${created.json.id}`, { stage: 'Interview', notes: 'Interview scheduled' });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.json.stage, 'Interview');
+  assert.equal((await call('PUT', `/api/candidates/${created.json.id}`, { stage: 'Unknown' })).status, 400);
+  assert.equal((await call('GET', '/api/candidates')).json[0].id, created.json.id);
+  assert.equal((await call('DELETE', `/api/candidates/${created.json.id}`)).status, 200);
+  assert.equal((await call('DELETE', `/api/candidates/${created.json.id}`)).status, 404);
+  const crmLogin = await call('POST', '/api/auth/login', {
+    product: 'crm', email: 'contact@righthead.in', password: CRM_PASSWORD
+  });
+  assert.equal(crmLogin.status, 200);
+  cookie = crmLogin.headers.get('set-cookie').split(';')[0];
 });
 
 test('Excel reader is served locally (CSP blocks CDNs)', async () => {

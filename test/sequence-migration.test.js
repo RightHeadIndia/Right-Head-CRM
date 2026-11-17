@@ -46,7 +46,7 @@ test('server migrates legacy statuses and sequence schedules on startup', async 
 
   const port = 30000 + Math.floor(Math.random() * 20000);
   const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT: String(port), APP_PASSWORD: password, CRM_ENCRYPTION_KEY: key, CRM_DB_FILE: file, GROQ_API_KEY: '', AI_API_KEY: '' },
+    env: { ...process.env, PORT: String(port), APP_PASSWORD: password, CRM_LOGIN_PASSWORD: 'migration-crm-password', TALENT_LOGIN_PASSWORD: 'migration-talent-password', CRM_ENCRYPTION_KEY: key, CRM_DB_FILE: file, GROQ_API_KEY: '', AI_API_KEY: '' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   try {
@@ -60,7 +60,7 @@ test('server migrates legacy statuses and sequence schedules on startup', async 
       });
     });
     const login = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ product: 'crm', email: 'contact@righthead.in', password: 'migration-crm-password' })
     });
     assert.equal(login.status, 200);
     const cookie = login.headers.get('set-cookie').split(';')[0];

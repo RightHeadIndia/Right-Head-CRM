@@ -14,6 +14,16 @@ const PORT = process.env.PORT || 3000;
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
 if (!APP_PASSWORD) throw new Error('Set APP_PASSWORD before starting the CRM.');
 if (APP_PASSWORD.length < 12) throw new Error('APP_PASSWORD must be at least 12 characters long.');
+const LOGIN_CREDENTIALS = {
+  crm: { email: 'contact@righthead.in', password: process.env.CRM_LOGIN_PASSWORD || '' },
+  talent: { email: 'avvni.sharrma@righthead.in', password: process.env.TALENT_LOGIN_PASSWORD || '' }
+};
+for (const [product, credentials] of Object.entries(LOGIN_CREDENTIALS)) {
+  if (credentials.password.length < 12) throw new Error(`Set ${product === 'crm' ? 'CRM_LOGIN_PASSWORD' : 'TALENT_LOGIN_PASSWORD'} to at least 12 characters.`);
+}
+if (LOGIN_CREDENTIALS.crm.password === LOGIN_CREDENTIALS.talent.password) {
+  throw new Error('CRM_LOGIN_PASSWORD and TALENT_LOGIN_PASSWORD must be different.');
+}
 async function startCRM() {
 // Production uses Neon whenever DATABASE_URL is set. SQLite is available only
 // for explicit local test/development runs with CRM_DB_FILE configured.
@@ -84,10 +94,10 @@ app.use((req, res, next) => {
   next();
 });
 
-function createSessionToken() {
+function createSessionToken(product) {
   const rand = crypto.randomBytes(16).toString('hex');
   const exp = Date.now() + SESSION_MS;
-  const payload = `${rand}.${exp}`;
+  const payload = `${rand}.${exp}.${product}`;
   const sig = crypto.createHmac('sha256', APP_PASSWORD).update(payload).digest('hex');
   return `${payload}.${sig}`;
 }
@@ -98,31 +108,47 @@ function sessionId(req) {
   return part ? decodeURIComponent(part.slice(COOKIE_NAME.length + 1)) : '';
 }
 
-function hasSession(req) {
+function sessionProduct(req) {
   const token = sessionId(req);
-  if (!token) return false;
-  if (revokedSessions.has(token)) return false;
+  if (!token || revokedSessions.has(token)) return '';
 
   const parts = token.split('.');
-  if (parts.length === 3) {
-    const [rand, expStr, sig] = parts;
+  if (parts.length === 4 || parts.length === 3) {
+    const [rand, expStr, product, sig] = parts.length === 4
+      ? parts
+      : [parts[0], parts[1], 'crm', parts[2]];
     const exp = Number(expStr);
-    if (!Number.isFinite(exp) || exp <= Date.now()) return false;
-    const payload = `${rand}.${expStr}`;
+    if (!Number.isFinite(exp) || exp <= Date.now() || !['crm', 'talent'].includes(product)) return '';
+    const payload = parts.length === 4 ? `${rand}.${expStr}.${product}` : `${rand}.${expStr}`;
     const expectedSig = crypto.createHmac('sha256', APP_PASSWORD).update(payload).digest('hex');
     try {
       if (crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expectedSig, 'hex'))) {
-        return true;
+        return product;
       }
     } catch {
-      return false;
+      return '';
     }
   }
 
   const expires = sessions.get(token);
-  if (!expires) return false;
-  if (expires <= Date.now()) { sessions.delete(token); return false; }
-  return true;
+  if (!expires) return '';
+  if (expires <= Date.now()) { sessions.delete(token); return ''; }
+  return 'crm';
+}
+function productForPath(pathname) {
+  return ['/talent.html', '/talent.css', '/talent.js'].includes(pathname) ||
+    pathname === '/api/candidates' || pathname.startsWith('/api/candidates/')
+    ? 'talent'
+    : 'crm';
+}
+function loginUrl(product) {
+  const next = product === 'talent' ? '/talent.html' : '/index.html';
+  return `/login.html?product=${product}&next=${encodeURIComponent(next)}`;
+}
+function equalHash(value, expected) {
+  const actualHash = crypto.createHash('sha256').update(String(value || '')).digest();
+  const expectedHash = crypto.createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(actualHash, expectedHash);
 }
 
 function setSessionCookie(req, res, id) {
@@ -132,22 +158,37 @@ function setSessionCookie(req, res, id) {
 }
 const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 
-app.get('/api/auth/session', (req, res) => res.json({ authenticated: hasSession(req) }));
+app.get('/api/auth/session', (req, res) => {
+  const product = sessionProduct(req);
+  res.json({
+    authenticated: Boolean(product),
+    product,
+    loginEmails: Object.fromEntries(Object.entries(LOGIN_CREDENTIALS).map(([name, credentials]) => [name, credentials.email]))
+  });
+});
 app.post('/api/auth/login', (req, res) => {
   for (const [id, expires] of sessions) if (expires <= Date.now()) sessions.delete(id);
-  const key = req.ip || req.socket.remoteAddress || 'unknown';
+  const product = req.body?.product;
+  const credentials = Object.hasOwn(LOGIN_CREDENTIALS, product) ? LOGIN_CREDENTIALS[product] : null;
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const key = `${ip}:${product || 'unknown'}:${email}`;
   const current = loginFailures.get(key) || { count: 0, until: 0 };
-  if (current.until > Date.now()) return res.status(429).json({ error: 'Too many attempts. Wait 15 minutes and try again.' });
-  const supplied = crypto.createHash('sha256').update(String(req.body?.password || '')).digest();
-  const expected = crypto.createHash('sha256').update(APP_PASSWORD).digest();
-  if (!crypto.timingSafeEqual(supplied, expected)) {
+  if (current.until > Date.now()) {
+    const retryAfter = Math.max(1, Math.ceil((current.until - Date.now()) / 1000));
+    res.set('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(retryAfter / 60)} minute${retryAfter >= 120 ? 's' : ''}.` });
+  }
+  const emailMatches = equalHash(email, credentials?.email || '');
+  const passwordMatches = equalHash(req.body?.password, credentials?.password || '');
+  if (!credentials || !emailMatches || !passwordMatches) {
     current.count++;
     if (current.count >= 5) { current.count = 0; current.until = Date.now() + 15 * 60 * 1000; }
     loginFailures.set(key, current);
-    return res.status(401).json({ error: 'Incorrect company password.' });
+    return res.status(401).json({ error: 'Incorrect email or password for this workspace.' });
   }
   loginFailures.delete(key);
-  const id = createSessionToken();
+  const id = createSessionToken(product);
   sessions.set(id, Date.now() + SESSION_MS);
   setSessionCookie(req, res, id);
   res.json({ ok: true });
@@ -168,17 +209,19 @@ app.use((req, res, next) => {
   let decodedPath = req.path;
   try { decodedPath = decodeURIComponent(req.path); } catch (_) {}
 
+  if (req.path === '/') return res.sendFile(path.join(__dirname, 'public', 'portal.html'));
   const isPublic =
-    ['/login.html', '/login.js', '/login.css', '/Right head Logo.png', '/logo.png'].includes(decodedPath) ||
+    ['/login.html', '/login.js', '/login.css', '/portal.html', '/portal.css', '/theme.js', '/Right head Logo.png', '/logo.png'].includes(decodedPath) ||
     ['/Right head Logo.png', '/logo.png'].includes(req.path) ||
     /\.(png|jpg|jpeg|svg|ico|webp|gif)$/i.test(decodedPath) ||
     decodedPath.startsWith('/vendor/');
 
   if (req.path === '/api/webhooks/whatsapp') return next();
   if (isPublic) return next();
-  if (hasSession(req)) return next();
-  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Please log in to continue.' });
-  res.redirect('/login.html');
+  const requiredProduct = productForPath(decodedPath);
+  if (sessionProduct(req) === requiredProduct) return next();
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: `Sign in to the ${requiredProduct === 'talent' ? 'Talent Acquisition' : 'CRM'} workspace to continue.` });
+  res.redirect(loginUrl(requiredProduct));
 });
 // The Excel reader is served from node_modules because the Content-Security-Policy above blocks scripts from other sites.
 app.get('/vendor/xlsx.full.min.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js')));
@@ -191,6 +234,7 @@ const save = db => writeDatabase(database, db);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const now = () => new Date().toISOString();
 const STAGES = ['new', 'contacted', 'replied', 'onboarded', 'rejected'];
+const CANDIDATE_STAGES = ['Applied', 'Screening', 'Interview', 'Offer', 'Hired', 'Rejected'];
 const CALLS = ['not_called', 'connected', 'no_answer', 'busy', 'callback'];
 const EMAIL_FOLLOW_UP_HOURS = 48;
 const LEGACY_SEQUENCE_DAYS = [1, 2, 4, 7, 10];
@@ -251,6 +295,26 @@ function cleanClientInput(value, partial = false) {
   if (value.callStatus !== undefined) {
     if (!CALLS.includes(value.callStatus)) return { error: 'callStatus is not valid' };
     clean.callStatus = value.callStatus;
+  }
+  return { clean };
+}
+function cleanCandidateInput(value, partial = false) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'candidate data must be an object' };
+  const clean = {};
+  const fields = { name: 200, role: 200, email: 254, phone: 50, source: 200, notes: 6000 };
+  for (const [field, max] of Object.entries(fields)) {
+    if (value[field] === undefined) continue;
+    if (value[field] !== null && typeof value[field] !== 'string') return { error: `${field} must be text` };
+    clean[field] = String(value[field] || '').trim().slice(0, max);
+  }
+  if (!partial && !clean.name) return { error: 'name is required' };
+  if (!partial && !clean.role) return { error: 'role is required' };
+  if (clean.name !== undefined && !clean.name) return { error: 'name is required' };
+  if (clean.role !== undefined && !clean.role) return { error: 'role is required' };
+  if (clean.email && !EMAIL_PATTERN.test(clean.email)) return { error: 'email is not valid' };
+  if (value.stage !== undefined) {
+    if (!CANDIDATE_STAGES.includes(value.stage)) return { error: 'stage is not valid' };
+    clean.stage = value.stage;
   }
   return { clean };
 }
@@ -391,6 +455,50 @@ app.get('/api/backup', asyncRoute(async (req, res) => {
     if (backupFile) try { fs.rmSync(backupFile, { force: true }); } catch (error) { console.error('CRM temporary backup cleanup failed:', error.message); }
   }
 }));
+
+app.get('/api/candidates', (req, res) => {
+  const candidates = load().candidates;
+  res.json(candidates.slice().sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))));
+});
+
+app.post('/api/candidates', (req, res) => {
+  const db = load();
+  const result = cleanCandidateInput(req.body);
+  if (result.error) return res.status(400).json({ error: result.error });
+  const candidate = {
+    id: uid(),
+    ...result.clean,
+    stage: result.clean.stage || 'Applied',
+    createdAt: now(),
+    updatedAt: now()
+  };
+  db.candidates.push(candidate);
+  save(db);
+  res.json(candidate);
+});
+
+app.put('/api/candidates/:id', async (req, res, next) => {
+  const db = load();
+  const candidate = db.candidates.find(item => item.id === req.params.id);
+  if (!candidate) return res.status(404).json({ error: 'not found' });
+  const result = cleanCandidateInput(req.body, true);
+  if (result.error) return res.status(400).json({ error: result.error });
+  if (!Object.keys(result.clean).length) return res.status(400).json({ error: 'candidate changes are required' });
+  Object.assign(candidate, result.clean, { updatedAt: now() });
+  save(db);
+  try { await flush(database); } catch (error) { return next(error); }
+  res.json(candidate);
+});
+
+app.delete('/api/candidates/:id', async (req, res, next) => {
+  const db = load();
+  const remaining = db.candidates.filter(item => item.id !== req.params.id);
+  if (remaining.length === db.candidates.length) return res.status(404).json({ error: 'not found' });
+  db.candidates = remaining;
+  save(db);
+  try { await flush(database); } catch (error) { return next(error); }
+  res.json({ ok: true });
+});
 
 app.get('/api/clients', (req, res) => {
   const db = load();

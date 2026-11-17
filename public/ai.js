@@ -248,7 +248,7 @@ async function aiSettingsPanel() {
 async function saveGeneral() {
   await api('/settings', 'PUT', { company: $('#g_company').value, currency: $('#g_cur').value, ai: { apiKey: $('#g_key').value, model: $('#g_model').value, provider: $('#g_provider').value, baseUrl: $('#g_baseUrl').value } });
   settings = await api('/settings');
-  $('#brandName').textContent = (settings.company || 'Company') + ' CRM'; document.title = $('#brandName').textContent;
+  renderBrandName(settings.company || 'Company');
   toast('Saved'); renderSettings();
 }
 async function aiTest() {

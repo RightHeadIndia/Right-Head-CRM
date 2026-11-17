@@ -17,15 +17,18 @@ test('records are encrypted on disk and survive a restart', () => {
   let db = openDatabase(file, null);
   const data = readDatabase(db);
   data.clients.push(client('c1', 'Amit Secret Sharma'));
+  data.candidates.push({ id: 'candidate1', name: 'Maya Candidate Secret', stage: 'Applied' });
   data.settings.smtp.pass = 'smtp-secret-pass';
   writeDatabase(db, data);
   db.close();
   const raw = fs.readFileSync(file);
   assert.ok(!raw.includes('Amit Secret'), 'client name must not appear in the file');
+  assert.ok(!raw.includes('Maya Candidate Secret'), 'candidate name must not appear in the file');
   assert.ok(!raw.includes('smtp-secret-pass'), 'SMTP password must not appear in the file');
   db = openDatabase(file, null);
   const again = readDatabase(db);
   assert.equal(again.clients[0].name, 'Amit Secret Sharma');
+  assert.equal(again.candidates[0].name, 'Maya Candidate Secret');
   assert.equal(again.settings.smtp.pass, 'smtp-secret-pass');
   db.close();
 });

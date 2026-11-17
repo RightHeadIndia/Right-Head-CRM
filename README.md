@@ -5,7 +5,7 @@ A CRM for a sales / outreach team: lead and communication statuses, calling, fol
 ## Quick start
 
 1. Install **Node.js 22.16 or newer** (24 recommended) from https://nodejs.org.
-2. Copy `.env.example` to `.env` and set `DATABASE_URL`, `APP_PASSWORD`, and `CRM_ENCRYPTION_KEY`.
+2. Set `DATABASE_URL`, `APP_PASSWORD`, `CRM_LOGIN_PASSWORD`, `TALENT_LOGIN_PASSWORD`, and `CRM_ENCRYPTION_KEY` in `.env` or your hosting provider. Use separate, unique passwords of at least 12 characters for CRM and Talent Acquisition.
 3. In Neon Console, open the intended project/database and run `database/schema.sql` in SQL Editor. The schema uses `CREATE TABLE IF NOT EXISTS` and does not delete existing records.
 4. Install and start:
 
@@ -14,7 +14,7 @@ npm install
 npm start
 ```
 
-Open http://localhost:3000 and sign in with `APP_PASSWORD`.
+Open http://localhost:3000 for the Right Head Management workspace selector. CRM signs in as `contact@righthead.in`; Talent Acquisition signs in as `avvni.sharrma@righthead.in`. HR Health Check opens its external site in the same tab and uses that site's own login.
 
 **Existing encrypted Neon database:** use the exact `CRM_ENCRYPTION_KEY` already associated with that database. Do not run `npm run setup` to generate a replacement key. A different key makes the existing records unreadable. If you need a blank CRM, use a separate Neon database; do not truncate the existing database.
 
@@ -34,7 +34,9 @@ Production requires `DATABASE_URL` and does not fall back to SQLite. Explicit `C
 
 ## Using it
 
-**Dashboard** and sidebar pages: All Clients, Calling Status, Follow-up Reminders, Replies (blue), Onboarded (green), Red Zone (red), Tasks, Deals Pipeline, Reports, Mass Mailing, Email Templates, AI Assistant, Settings & Import.
+**Management portal.** The home page links to CRM, Talent Acquisition, and the external HR Health Check. CRM keeps its existing sign-in and workflows. Talent Acquisition is an authenticated candidate pipeline with candidate contact details, position, source, notes, search, stage filtering, and the Applied → Screening → Interview → Offer → Hired / Rejected stages. Candidate records use the existing encrypted database.
+
+**CRM dashboard** and sidebar pages: All Clients, Calling Status, Follow-up Reminders, Replies (blue), Onboarded (green), Red Zone (red), Tasks, Deals Pipeline, Reports, Mass Mailing, Email Templates, AI Assistant, Settings & Import.
 
 **Colour zones.** A client starts as New. Setting a call status makes them Contacted. "Client replied" turns them blue. Onboarded is green and Said No is red; both clear the reminder. Red Zone clients are never mailed.
 
@@ -52,7 +54,7 @@ Production requires `DATABASE_URL` and does not fall back to SQLite. Explicit `C
 
 **Communication.** Click-to-call opens the device's phone app and logs an attempt; choose a phone call outcome: Connected, No answer, Busy, or Call back. **Email shared** and **Credentials shared** are separate Yes/No fields on a client row or in the client editor; they are also available for bulk updates and CSV export. The dashboard shows live totals and the six most recently updated clients for each sharing flag. Selecting **Call back** creates a high-priority task and reminder. WhatsApp links open the installed app; when Meta WhatsApp Cloud API credentials and a public webhook are configured in Settings, the CRM can send a message and record Meta delivery status. LinkedIn profile visits and drafted messages are recorded, while sending remains in LinkedIn because outbound messaging depends on LinkedIn's approved API permissions. A browser `tel:` link cannot choose the caller ID; use a configured phone or calling provider for that.
 
-**Themes.** Use the header toggle for Dark/Light mode. The choice is saved in CRM settings and in the current browser.
+**Themes.** Use the Dark/Light mode toggle on the portal, sign-in, CRM, or Talent Acquisition workspace. The browser preference is shared across these pages; changing it in CRM also saves the account preference.
 
 **Tasks.** To-dos with due date, priority and an optional client; filter by open / due today / overdue / done.
 
@@ -92,7 +94,7 @@ Settings & Import > General & AI > select Groq or an OpenAI-compatible provider,
 When you use an AI button, the required client details (name, company, contact info, notes, recent activity and messages) are sent to the selected provider; the assistant can read any client you ask about. Drafts can be wrong: check names, facts and any `[bracketed]` blanks before sending. Client messages are treated as data, not instructions, and the server limits AI calls to 40 per minute. Groq model availability and limits can change; choose a model enabled for your account.
 
 ## Security and backups
-- Sign-in uses one shared password (`APP_PASSWORD`, at least 12 characters). Sessions last 12 hours, use an HttpOnly SameSite cookie, and 5 wrong attempts lock the login for 15 minutes. It is meant for a small trusted team; there are no per-person accounts or audit trail yet.
+- CRM and Talent Acquisition have separate email/password logins (`CRM_LOGIN_PASSWORD` and `TALENT_LOGIN_PASSWORD`, each at least 12 characters and different). `APP_PASSWORD` signs session tokens and should also be a strong secret. Sessions last 12 hours and use an HttpOnly SameSite cookie; 5 wrong attempts lock the login for 15 minutes. HR Health Check authentication is managed by its external site.
 - Every record and setting is encrypted at rest with AES-256-GCM using `CRM_ENCRYPTION_KEY`, which is never stored in the database. `GROQ_API_KEY` and other provider keys set in the environment stay outside the database; keys entered in Settings are encrypted with the CRM settings.
 - **Settings & Import > Download backup** regularly and store it securely. PostgreSQL mode exports a JSON backup of the CRM data; treat it as sensitive because the export contains decrypted record values. SQLite compatibility mode downloads an encrypted SQLite backup.
 - Behind an HTTPS reverse proxy set `CRM_TRUST_PROXY=1`. Never commit `.env`; `.gitignore` excludes it. Configure environment variables in Render rather than uploading `.env`.
@@ -113,6 +115,8 @@ lib/database-postgres.js Neon PostgreSQL adapter with encrypted records and vers
 database/schema.sql    Repeatable Neon schema setup
 lib/tools.js           tasks, deals, templates, reports, CSV export
 lib/ai.js              Groq/OpenAI-compatible AI features
+public/portal.html     product selector for CRM, Talent Acquisition, and HR Health Check
+public/talent.*        authenticated candidate pipeline
 public/index.html      app shell        public/login.*   sign-in page
 public/app.js          dashboard, clients, mass mail, settings, import
 public/tools.js        tasks, deals board, reports, templates pages
@@ -122,7 +126,7 @@ data/crm.sqlite        created on first run (back it up)
 ```
 
 ## API (for developers; all routes need a signed-in session)
-`POST /api/auth/login|logout`, `GET /api/auth/session`; `GET/POST /api/clients`, `PUT/DELETE /api/clients/:id`, `GET /api/clients/:id/activities`, `POST /api/clients/:id/activity`, `POST /api/clients/import` (array); `GET /api/dashboard`; `GET/PUT /api/settings`; tasks, deals, templates: `GET/POST /api/{tasks|deals|templates}`, `PUT/DELETE /api/{...}/:id`; `GET /api/reports?days=30`; `GET /api/export/{clients|deals|tasks|activities}.csv`; `POST /api/mail/send`, `/api/mail/send-one`; `GET /api/mail/audience/:key`, `GET /api/campaigns`; `GET /api/backup`; `GET /api/ai/status`, `POST /api/ai/{test|draft|summary|analyze-reply|campaign|assistant}`.
+`POST /api/auth/login|logout`, `GET /api/auth/session`; `GET/POST /api/candidates`, `PUT/DELETE /api/candidates/:id`; `GET/POST /api/clients`, `PUT/DELETE /api/clients/:id`, `GET /api/clients/:id/activities`, `POST /api/clients/:id/activity`, `POST /api/clients/import` (array); `GET /api/dashboard`; `GET/PUT /api/settings`; tasks, deals, templates: `GET/POST /api/{tasks|deals|templates}`, `PUT/DELETE /api/{...}/:id`; `GET /api/reports?days=30`; `GET /api/export/{clients|deals|tasks|activities}.csv`; `POST /api/mail/send`, `/api/mail/send-one`; `GET /api/mail/audience/:key`, `GET /api/campaigns`; `GET /api/backup`; `GET /api/ai/status`, `POST /api/ai/{test|draft|summary|analyze-reply|campaign|assistant}`.
 
 ## Ideas for next steps
 Per-employee accounts and roles, click-to-call (Exotel / Knowlarity), WhatsApp Business API, email open tracking, and shared cache/locking for multi-instance deployments.

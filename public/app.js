@@ -2,7 +2,7 @@
 const $ = s => document.querySelector(s);
 const api = async (url, method = 'GET', body) => {
   const r = await fetch('/api' + url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-  if (r.status === 401) { location.replace('/login.html'); throw new Error('Please sign in again.'); }
+  if (r.status === 401) { location.replace('/login.html?product=crm&next=%2Findex.html'); throw new Error('Please sign in again.'); }
   let data;
   try { data = await r.json(); } catch (_) { data = { error: 'The server returned an unreadable response.' }; }
   if (!r.ok) {
@@ -51,12 +51,26 @@ function applyTheme(theme) {
   const button = $('#themeToggle');
   if (button) button.textContent = selected === 'dark' ? 'Light mode' : 'Dark mode';
 }
+function renderBrandName(company) {
+  const companyName = String(company || 'Company').trim() || 'Company';
+  const companyLabel = document.createElement('span');
+  companyLabel.className = companyName.toLowerCase() === 'right head' ? 'brand-orange' : '';
+  companyLabel.textContent = companyName;
+  const productLabel = document.createElement('span');
+  productLabel.className = 'brand-blue';
+  productLabel.textContent = ' CRM';
+  $('#brandName').replaceChildren(companyLabel, productLabel);
+  document.title = $('#brandName').textContent;
+}
 async function toggleTheme() {
   const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   applyTheme(theme);
   try { await api('/settings', 'PUT', { theme }); settings.theme = theme; }
   catch (e) { toast('Theme saved on this device; account preference could not be saved.'); }
 }
+window.addEventListener('storage', event => {
+  if (event.key === 'crm-theme') applyTheme(event.newValue);
+});
 
 const PAGES = {
   dashboard: { title: 'Dashboard', icon: '&#9638;' },
@@ -1347,11 +1361,11 @@ window.addEventListener('unhandledrejection', event => {
 });
 
 (async function init() {
-  try { applyTheme(localStorage.getItem('crm-theme') || 'light'); } catch (_) { applyTheme('light'); }
   settings = await api('/settings');
-  applyTheme(settings.theme || document.documentElement.dataset.theme);
-  $('#brandName').textContent = (settings.company || 'Company') + ' CRM';
-  document.title = $('#brandName').textContent;
+  let savedTheme = '';
+  try { savedTheme = localStorage.getItem('crm-theme') || ''; } catch (_) {}
+  applyTheme(savedTheme || settings.theme || 'light');
+  renderBrandName(settings.company || 'Company');
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
   await refresh(); render(); checkReminders();
   setInterval(async () => { if (document.hidden) return; await refresh(); checkReminders(); renderNav(); if (page === 'dashboard') renderDashboard(); }, 60000);

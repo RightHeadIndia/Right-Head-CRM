@@ -3,22 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in - Right Head CRM</title>
+<title>Sign in - Right Head</title>
 <link rel="icon" type="image/png" href="Right head Logo.png">
+<script src="theme.js"></script>
 <link rel="stylesheet" href="login.css">
 </head>
 <body>
+<button class="theme-toggle" type="button" data-theme-toggle>Dark mode</button>
 <form id="form" class="card" autocomplete="off">
   <div class="login-brand">
     <img src="Right head Logo.png" onerror="this.onerror=null;this.src='logo.png'" alt="Right Head Logo" class="login-logo">
-    <h1>Right Head CRM</h1>
+    <span class="login-kicker"><span class="brand-orange">RIGHT HEAD</span> <span class="brand-blue">MANAGEMENT</span></span>
+    <h1 id="loginTitle">Right Head CRM</h1>
   </div>
-  <p>Enter the company password to continue.</p>
+  <p id="loginDescription">Sign in to your workspace to continue.</p>
+  <label for="email">Work email</label>
+  <input id="email" type="email" autocomplete="username" autofocus required>
   <label for="password">Password</label>
-  <input id="password" type="password" autocomplete="current-password" autofocus required>
+  <input id="password" type="password" autocomplete="current-password" required>
   <div id="error" role="alert"></div>
-  <button id="go" type="submit">Sign in</button>
-  <p class="company-links"><a href="mailto:contact@righthead.in">contact@righthead.in</a><br><a href="https://rightheadindia.in" target="_blank" rel="noopener noreferrer">Website</a> · <a href="https://www.linkedin.com/company/righthead" target="_blank" rel="noopener noreferrer">LinkedIn</a> · <a href="https://www.instagram.com/right.head_hr/?hl=en" target="_blank" rel="noopener noreferrer">Instagram</a></p>
+  <button id="go" type="submit">Continue to workspace</button>
+  <p class="company-links"><a href="/">← All workspaces</a><br><a href="mailto:contact@righthead.in">Need help? Contact Right Head</a></p>
 </form>
 <script src="login.js"></script>
 </body>

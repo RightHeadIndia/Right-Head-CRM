@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#f4f8fb">
+<title>Talent Acquisition | Right Head</title>
+<link rel="icon" type="image/png" href="Right head Logo.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="talent.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" aria-label="Right Head Management home"><img src="Right head Logo.png" alt="Right Head"><span><span class="brand-orange">RIGHT HEAD</span> <small class="brand-blue">MANAGEMENT</small></span></a>
+  <nav aria-label="Workspace navigation">
+    <a class="back-link" href="/">All workspaces</a>
+    <button class="quiet-button theme-toggle" type="button" data-theme-toggle>Dark mode</button>
+    <button id="logout" class="quiet-button" type="button">Log out</button>
+  </nav>
+</header>
+<main class="workspace">
+  <section class="page-heading">
+    <div>
+      <div class="eyebrow"><span></span> PEOPLE &amp; TALENT</div>
+      <h1>Talent Acquisition</h1>
+      <p>Keep candidates organized from first application through hiring.</p>
+    </div>
+    <button id="addCandidate" class="primary-button" type="button"><span aria-hidden="true">+</span> Add candidate</button>
+  </section>
+  <section class="metrics" aria-label="Candidate pipeline summary">
+    <article class="metric-card"><span>Total candidates</span><strong id="totalCount">0</strong><small>Across all stages</small></article>
+    <article class="metric-card"><span>In progress</span><strong id="activeCount">0</strong><small>Screening, interview, or offer</small></article>
+    <article class="metric-card"><span>Interviews</span><strong id="interviewCount">0</strong><small>Currently at interview</small></article>
+    <article class="metric-card"><span>Hired</span><strong id="hiredCount">0</strong><small>Successful hires</small></article>
+  </section>
+  <section class="candidate-panel">
+    <div class="panel-heading">
+      <div><h2>Candidate pipeline</h2><p>Search, review, and update your candidates.</p></div>
+      <div class="filters">
+        <label class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search candidates" aria-label="Search candidates"></label>
+        <label class="select-wrap"><span class="sr-only">Filter by stage</span><select id="stageFilter"><option value="">All stages</option></select></label>
+      </div>
+    </div>
+    <div id="statusMessage" class="status-message" role="status" hidden></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Candidate</th><th>Position</th><th>Source</th><th>Stage</th><th>Added</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody id="candidateRows"></tbody>
+      </table>
+      <div id="emptyState" class="empty-state" hidden><span class="empty-icon" aria-hidden="true">＋</span><strong>No candidates yet</strong><p>Add your first candidate to start building the hiring pipeline.</p><button class="text-button" type="button" id="emptyAdd">Add a candidate <span aria-hidden="true">→</span></button></div>
+      <div id="noResults" class="empty-state compact" hidden><strong>No matching candidates</strong><p>Try a different search or stage.</p></div>
+    </div>
+  </section>
+  <footer><span>© <span class="brand-orange">Right Head</span> <span class="brand-blue">Management</span></span><a href="mailto:contact@righthead.in">Need help? Contact us</a></footer>
+</main>
+<dialog id="candidateDialog" aria-labelledby="dialogTitle">
+  <form id="candidateForm" method="dialog">
+    <div class="dialog-heading"><div><span class="eyebrow">CANDIDATE PROFILE</span><h2 id="dialogTitle">Add candidate</h2></div><button id="closeDialog" class="close-button" type="button" aria-label="Close dialog">×</button></div>
+    <input id="candidateId" type="hidden">
+    <div class="form-grid">
+      <label class="full">Full name <span>*</span><input name="name" required maxlength="200" autocomplete="name"></label>
+      <label>Position <span>*</span><input name="role" required maxlength="200" placeholder="e.g. Product Designer"></label>
+      <label>Stage<select name="stage"></select></label>
+      <label>Email<input name="email" type="email" maxlength="254" autocomplete="email"></label>
+      <label>Phone<input name="phone" type="tel" maxlength="50" autocomplete="tel"></label>
+      <label class="full">Source<input name="source" maxlength="200" placeholder="e.g. LinkedIn, referral"></label>
+      <label class="full">Notes<textarea name="notes" rows="4" maxlength="6000" placeholder="Experience, interview feedback, or next steps"></textarea></label>
+    </div>
+    <div id="formError" class="form-error" role="alert"></div>
+    <div class="dialog-actions"><button id="cancelDialog" class="secondary-button" type="button">Cancel</button><button id="saveCandidate" class="primary-button" type="submit">Save candidate</button></div>
+  </form>
+</dialog>
+<script src="talent.js"></script>
+</body>
+</html>
