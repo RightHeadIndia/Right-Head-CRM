@@ -137,7 +137,8 @@ function sessionProduct(req) {
 }
 function productForPath(pathname) {
   return ['/talent.html', '/talent.css', '/talent.js'].includes(pathname) ||
-    pathname === '/api/candidates' || pathname.startsWith('/api/candidates/')
+    pathname === '/api/candidates' || pathname.startsWith('/api/candidates/') ||
+    pathname === '/api/ta-weekly' || pathname.startsWith('/api/ta-weekly/') || pathname === '/api/ta-export.xlsx'
     ? 'talent'
     : 'crm';
 }
@@ -234,7 +235,7 @@ const save = db => writeDatabase(database, db);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const now = () => new Date().toISOString();
 const STAGES = ['new', 'contacted', 'replied', 'onboarded', 'rejected'];
-const CANDIDATE_STAGES = ['Applied', 'Screening', 'Interview', 'Offer', 'Hired', 'Rejected'];
+const CANDIDATE_STAGES = ['Unspecified', 'Applied', 'Screening', 'Interview', 'Shortlisted', 'Offer', 'Hired', 'Rejected'];
 const CALLS = ['not_called', 'connected', 'no_answer', 'busy', 'callback'];
 const EMAIL_FOLLOW_UP_HOURS = 48;
 const LEGACY_SEQUENCE_DAYS = [1, 2, 4, 7, 10];
@@ -301,7 +302,7 @@ function cleanClientInput(value, partial = false) {
 function cleanCandidateInput(value, partial = false) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'candidate data must be an object' };
   const clean = {};
-  const fields = { name: 200, role: 200, email: 254, phone: 50, source: 200, notes: 6000 };
+  const fields = { name: 200, role: 200, email: 254, phone: 50, source: 200, notes: 6000, company: 200, recruiter: 200, month: 10, interviewDate: 30, interviewStatus: 100, interviewMode: 100, interviewTime: 100, clientStatus: 200, contactDetails: 500, feedback: 6000, finalCall: 200, doj: 30, remarks: 6000, sharedDate: 30, shortlistedDate: 30, offeredDate: 30 };
   for (const [field, max] of Object.entries(fields)) {
     if (value[field] === undefined) continue;
     if (value[field] !== null && typeof value[field] !== 'string') return { error: `${field} must be text` };
@@ -315,6 +316,19 @@ function cleanCandidateInput(value, partial = false) {
   if (value.stage !== undefined) {
     if (!CANDIDATE_STAGES.includes(value.stage)) return { error: 'stage is not valid' };
     clean.stage = value.stage;
+  }
+  if (value.statusHistory !== undefined) {
+    if (!Array.isArray(value.statusHistory) || value.statusHistory.length > 100) return { error: 'status history is not valid' };
+    clean.statusHistory = value.statusHistory.filter(entry => entry && CANDIDATE_STAGES.includes(entry.stage) && typeof entry.at === 'string').map(entry => ({ stage: entry.stage, at: entry.at }));
+  }
+  if (value.imported !== undefined) clean.imported = Boolean(value.imported);
+  if (value.interviews !== undefined) {
+    if (!Array.isArray(value.interviews) || value.interviews.length > 500) return { error: 'interviews must be an array of at most 500 records' };
+    const interviewFields = { date: 30, company: 200, role: 200, recruiter: 200, mode: 100, time: 100, candidateStatus: 200, clientStatus: 200, email: 254, phone: 50, contactDetails: 500, remarks: 6000, sharedDate: 30, shortlistedDate: 30, offeredDate: 30, doj: 30, finalCall: 200 };
+    clean.interviews = value.interviews.map(interview => Object.fromEntries(Object.entries(interviewFields).flatMap(([field, max]) => {
+      if (interview?.[field] === undefined || interview[field] === null) return [];
+      return [[field, String(interview[field]).trim().slice(0, max)]];
+    })));
   }
   return { clean };
 }
@@ -470,12 +484,98 @@ app.post('/api/candidates', (req, res) => {
     ...result.clean,
     stage: result.clean.stage || 'Applied',
     createdAt: now(),
-    updatedAt: now()
+    updatedAt: now(),
+    statusHistory: [{ stage: result.clean.stage || 'Applied', at: now(), ...(result.clean.recruiter ? { recruiter: result.clean.recruiter } : {}) }]
   };
   db.candidates.push(candidate);
   save(db);
   res.json(candidate);
 });
+
+app.post('/api/candidates/import', asyncRoute(async (req, res) => {
+  const rows = req.body?.rows;
+  if (!Array.isArray(rows) || rows.length > 5000) return res.status(400).json({ error: 'Import between 1 and 5000 previewed rows at a time.' });
+  const db = load(), result = { rows: rows.length, candidatesCreated: 0, interviewsAdded: 0, duplicatesSkipped: 0, duplicateDetailsMerged: 0, invalidSkipped: 0 };
+  const norm = value => String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+  const fingerprint = interview => {
+    const identity = [interview.date, interview.company, interview.role, interview.recruiter, interview.mode, interview.time].map(norm);
+    return (identity.some(Boolean) ? identity : [interview.candidateStatus, interview.clientStatus, interview.email, interview.phone, interview.contactDetails, interview.remarks].map(norm)).join('|');
+  };
+  const addReliableStatusDates = (record, interview, recruiter) => {
+    const statusDates = [
+      { stage: 'Shortlisted', at: interview.shortlistedDate },
+      { stage: 'Offer', at: interview.offeredDate },
+      { stage: 'Hired', at: interview.doj }
+    ];
+    record.statusHistory ||= [];
+    let changed = false;
+    for (const event of statusDates) if (event.at && !record.statusHistory.some(item => item.stage === event.stage && String(item.at).slice(0, 10) === event.at.slice(0, 10) && norm(item.recruiter || record.recruiter) === norm(recruiter || record.recruiter))) {
+      record.statusHistory.push({ stage: event.stage, at: `${event.at.slice(0, 10)}T12:00:00.000Z`, ...(recruiter ? { recruiter } : {}) });
+      changed = true;
+    }
+    return changed;
+  };
+  for (const source of rows) {
+    const raw = source && typeof source === 'object' ? source : {};
+    const interview = raw.interview && typeof raw.interview === 'object' ? raw.interview : {};
+    const fields = { name: raw.name, company: raw.company || '', recruiter: raw.recruiter || '', email: raw.email || '', phone: raw.phone || '', month: raw.month || '', stage: CANDIDATE_STAGES.includes(raw.stage) ? raw.stage : 'Unspecified', imported: true, sharedDate: interview.sharedDate || '', shortlistedDate: interview.shortlistedDate || '', offeredDate: interview.offeredDate || '', doj: interview.doj || '', finalCall: interview.finalCall || '' };
+    if (raw.role) fields.role = raw.role;
+    const checked = cleanCandidateInput(fields, true);
+    const cleanInterview = cleanCandidateInput({ interviews: [interview] }, true);
+    if (checked.error || cleanInterview.error || !checked.clean.name) { result.invalidSkipped++; continue; }
+    const clean = checked.clean;
+    const candidate = db.candidates.find(item => {
+      if (clean.email) return norm(item.email) === norm(clean.email);
+      if (clean.phone) return norm(item.phone).replace(/\D/g, '').slice(-10) === norm(clean.phone).replace(/\D/g, '').slice(-10);
+      return norm(item.name) === norm(clean.name) && norm(item.role) === norm(clean.role);
+    });
+    const incomingInterview = cleanInterview.clean.interviews[0];
+    const record = candidate || {
+      id: uid(), name: clean.name, role: clean.role || '', company: clean.company || '', recruiter: clean.recruiter || '', email: clean.email || '', phone: clean.phone || '', month: clean.month || '', stage: clean.stage,
+      imported: true, createdAt: now(), updatedAt: now(), statusHistory: [], interviews: []
+    };
+    const currentInterviews = record.interviews || [];
+    const legacyInterview = record.interviewDate || record.company || record.role || record.interviewStatus || record.feedback ? [{ date: record.interviewDate, company: record.company, role: record.role, recruiter: record.recruiter, mode: record.interviewMode, time: record.interviewTime, candidateStatus: record.interviewStatus, clientStatus: record.clientStatus, email: record.email, phone: record.phone, contactDetails: record.contactDetails, remarks: record.remarks || record.feedback }] : [];
+    const key = fingerprint(incomingInterview);
+    const matchingInterview = currentInterviews.find(item => fingerprint(item) === key);
+    const matchingLegacy = !matchingInterview && legacyInterview.some(item => fingerprint(item) === key);
+    if (matchingInterview || matchingLegacy) {
+      result.duplicatesSkipped++;
+      let enriched = false;
+      if (matchingInterview) {
+        for (const [field, value] of Object.entries(incomingInterview)) if (value && !matchingInterview[field]) { matchingInterview[field] = value; enriched = true; }
+      }
+      const candidateFields = { sharedDate: incomingInterview.sharedDate, shortlistedDate: incomingInterview.shortlistedDate, offeredDate: incomingInterview.offeredDate, doj: incomingInterview.doj, finalCall: incomingInterview.finalCall };
+      for (const [field, value] of Object.entries(candidateFields)) if (value && !record[field]) { record[field] = value; enriched = true; }
+      if (clean.stage !== 'Unspecified' && record.stage !== clean.stage) { record.stage = clean.stage; enriched = true; }
+      if (!record.month && clean.month) { record.month = clean.month; enriched = true; }
+      if (matchingLegacy) {
+        for (const [field, value] of Object.entries({ interviewMode: incomingInterview.mode, interviewTime: incomingInterview.time, interviewStatus: incomingInterview.candidateStatus, clientStatus: incomingInterview.clientStatus, contactDetails: incomingInterview.contactDetails, remarks: incomingInterview.remarks })) if (value && !record[field]) { record[field] = value; enriched = true; }
+      }
+      if (!record.recruiter && (incomingInterview.recruiter || clean.recruiter)) { record.recruiter = incomingInterview.recruiter || clean.recruiter; enriched = true; }
+      if (addReliableStatusDates(record, incomingInterview, incomingInterview.recruiter || clean.recruiter || record.recruiter)) enriched = true;
+      if (enriched) { record.updatedAt = now(); result.duplicateDetailsMerged++; }
+      continue;
+    }
+    if (currentInterviews.length >= 500) { result.invalidSkipped++; continue; }
+    if (!candidate) { db.candidates.push(record); result.candidatesCreated++; }
+    for (const field of ['role', 'company', 'recruiter', 'email', 'phone']) if (!record[field] && clean[field]) record[field] = clean[field];
+    if (!record.month && clean.month) record.month = clean.month;
+    if (clean.stage !== 'Unspecified') record.stage = clean.stage;
+    if (incomingInterview.sharedDate && !record.sharedDate) record.sharedDate = incomingInterview.sharedDate;
+    if (incomingInterview.shortlistedDate && !record.shortlistedDate) record.shortlistedDate = incomingInterview.shortlistedDate;
+    if (incomingInterview.offeredDate && !record.offeredDate) record.offeredDate = incomingInterview.offeredDate;
+    if (incomingInterview.doj && !record.doj) record.doj = incomingInterview.doj;
+    if (incomingInterview.finalCall && !record.finalCall) record.finalCall = incomingInterview.finalCall;
+    record.interviews = currentInterviews;
+    record.interviews.push(incomingInterview);
+    addReliableStatusDates(record, incomingInterview, incomingInterview.recruiter || clean.recruiter || record.recruiter);
+    record.updatedAt = now();
+    result.interviewsAdded++;
+  }
+  if (result.candidatesCreated || result.interviewsAdded || result.duplicateDetailsMerged) { save(db); await flush(database); }
+  res.json(result);
+}));
 
 app.put('/api/candidates/:id', async (req, res, next) => {
   const db = load();
@@ -484,6 +584,9 @@ app.put('/api/candidates/:id', async (req, res, next) => {
   const result = cleanCandidateInput(req.body, true);
   if (result.error) return res.status(400).json({ error: result.error });
   if (!Object.keys(result.clean).length) return res.status(400).json({ error: 'candidate changes are required' });
+  if (result.clean.stage && result.clean.stage !== candidate.stage) {
+    result.clean.statusHistory = [...(candidate.statusHistory || [{ stage: candidate.stage, at: candidate.updatedAt || candidate.createdAt, ...(candidate.recruiter ? { recruiter: candidate.recruiter } : {}) }]), { stage: result.clean.stage, at: now(), ...(candidate.recruiter ? { recruiter: candidate.recruiter } : {}) }].slice(-100);
+  }
   Object.assign(candidate, result.clean, { updatedAt: now() });
   save(db);
   try { await flush(database); } catch (error) { return next(error); }
@@ -499,6 +602,84 @@ app.delete('/api/candidates/:id', async (req, res, next) => {
   try { await flush(database); } catch (error) { return next(error); }
   res.json({ ok: true });
 });
+
+const TA_METRICS = ['Candidate Shared', 'Candidate Shortlisted', 'Candidate Offered', 'Candidate Joined (Name)'];
+const TA_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+function validWeekStart(value) { return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) && new Date(`${value}T00:00:00Z`).getUTCDay() === 1; }
+app.get('/api/ta-weekly', (req, res) => {
+  const weekStart = String(req.query.week || '');
+  if (!validWeekStart(weekStart)) return res.status(400).json({ error: 'Choose a Monday as the week start.' });
+  res.json(load().weeklyReports.filter(report => report.weekStart === weekStart));
+});
+app.put('/api/ta-weekly', asyncRoute(async (req, res) => {
+  const { weekStart, recruiter, manual } = req.body || {};
+  if (!validWeekStart(weekStart)) return res.status(400).json({ error: 'Choose a Monday as the week start.' });
+  const cleanRecruiter = String(recruiter || '').trim().slice(0, 200);
+  if (!cleanRecruiter) return res.status(400).json({ error: 'Recruiter is required.' });
+  const cleanManual = {};
+  for (const metric of TA_METRICS) {
+    cleanManual[metric] = {};
+    for (const day of TA_DAYS) {
+      const cell = manual?.[metric]?.[day] || {};
+      cleanManual[metric][day] = {};
+      for (const field of ['target', 'achievement']) {
+        const raw = cell[field];
+        if (raw !== '' && raw !== undefined && (!Number.isFinite(Number(raw)) || Number(raw) < 0 || Number(raw) > 100000)) return res.status(400).json({ error: 'Targets and achievements must be between 0 and 100000.' });
+        cleanManual[metric][day][field] = raw === '' || raw === undefined ? '' : Number(raw);
+      }
+    }
+  }
+  const db = load();
+  const existing = db.weeklyReports.find(row => row.weekStart === weekStart && row.recruiter.toLowerCase() === cleanRecruiter.toLowerCase());
+  const record = existing || { id: uid(), weekStart, recruiter: cleanRecruiter };
+  record.weekStart = weekStart; record.recruiter = cleanRecruiter; record.manual = cleanManual; record.updatedAt = now();
+  if (!existing) db.weeklyReports.push(record);
+  save(db);
+  await flush(database);
+  res.json(record);
+}));
+app.delete('/api/ta-weekly/:id', asyncRoute(async (req, res) => {
+  const db = load(), originalLength = db.weeklyReports.length;
+  db.weeklyReports = db.weeklyReports.filter(row => row.id !== req.params.id);
+  if (db.weeklyReports.length === originalLength) return res.status(404).json({ error: 'Weekly recruiter entry not found.' });
+  save(db);
+  await flush(database);
+  res.json({ ok: true });
+}));
+app.get('/api/ta-export.xlsx', asyncRoute(async (req, res) => {
+  const weekStart = String(req.query.week || '');
+  if (!validWeekStart(weekStart)) return res.status(400).json({ error: 'Choose a Monday as the week start.' });
+  const XLSX = require('xlsx');
+  const db = load(), workbook = XLSX.utils.book_new();
+  const candidates = db.candidates;
+  const interviewRows = candidates.flatMap(c => (c.interviews?.length ? c.interviews : [{ date: c.interviewDate, company: c.company, role: c.role, recruiter: c.recruiter, mode: c.interviewMode, time: c.interviewTime, candidateStatus: c.interviewStatus || c.stage, clientStatus: c.clientStatus, email: c.email, phone: c.phone, contactDetails: c.contactDetails, remarks: c.remarks || c.feedback }]).map(i => ({ Candidate: c.name, Recruiter: i.recruiter || c.recruiter || '', 'Interview Date': i.date || '', Company: i.company || c.company || '', Profile: i.role || c.role || '', 'Interview Mode': i.mode || '', 'Interview Time': i.time || '', 'Candidate Status': i.candidateStatus || c.stage || '', 'Client Status': i.clientStatus || '', Email: i.email || c.email || '', Phone: i.phone || c.phone || '', 'Contact Details': i.contactDetails || '', Remarks: i.remarks || '' })));
+  const offerRows = candidates.filter(c => ['Shortlisted', 'Offer', 'Hired'].includes(c.stage)).map(c => ({ 'TA Name': c.recruiter || '', Month: c.month || (c.doj ? c.doj.slice(0, 7) : weekStart.slice(0, 7)), Company: c.company || '', Profile: c.role || '', Candidate: c.name, Status: c.stage, 'Final Call': c.finalCall || '', DOJ: c.doj || '', Remarks: c.remarks || '' }));
+  const reports = db.weeklyReports.filter(r => r.weekStart === weekStart);
+  const weeklyRows = [];
+  for (const recruiter of new Set([...candidates.flatMap(c => [c.recruiter, ...(c.interviews || []).map(i => i.recruiter)]).filter(Boolean), ...reports.map(r => r.recruiter)])) {
+    for (const metric of TA_METRICS) {
+      const row = { Recruiter: recruiter, Metric: metric };
+      for (let offset = 0; offset < 6; offset++) {
+        const date = new Date(`${weekStart}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + offset);
+        const day = TA_DAYS[offset], dayKey = date.toISOString().slice(0, 10);
+        const count = candidates.filter(c => {
+          if (metric === TA_METRICS[0]) return c.interviews?.length ? c.interviews.some(i => String(i.recruiter || c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && String(i.sharedDate || '').slice(0, 10) === dayKey) : String(c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && (c.sharedDate || (c.imported ? '' : c.createdAt) || '').slice(0, 10) === dayKey;
+          const stage = metric === TA_METRICS[1] ? 'Shortlisted' : metric === TA_METRICS[2] ? 'Offer' : 'Hired';
+          return (c.statusHistory || []).some(h => String(h.recruiter || c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && h.at.slice(0, 10) === dayKey && h.stage === stage);
+        }).length;
+        const manual = reports.find(r => r.recruiter === recruiter)?.manual?.[metric]?.[day] || {};
+        row[`${day} Count/Names`] = metric === TA_METRICS[3] ? candidates.filter(c => (c.statusHistory || []).some(h => String(h.recruiter || c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && h.at.slice(0, 10) === dayKey && h.stage === 'Hired')).map(c => c.name).join(', ') : count;
+        row[`${day} Target`] = manual.target; row[`${day} Achievement`] = manual.achievement;
+      }
+      weeklyRows.push(row);
+    }
+  }
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(interviewRows), 'Interview Tracker');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(offerRows), 'Shortlisted Offered');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(weeklyRows), 'Weekly Tracker');
+  res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Content-Disposition': `attachment; filename="talent-trackers-${weekStart}.xlsx"`, 'Cache-Control': 'no-store' });
+  res.send(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }));
+}));
 
 app.get('/api/clients', (req, res) => {
   const db = load();

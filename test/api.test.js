@@ -105,6 +105,39 @@ test('candidate pipeline supports validation, updates, and deletion', async () =
   cookie = crmLogin.headers.get('set-cookie').split(';')[0];
 });
 
+test('tracker import keeps historical interviews on one candidate, skips duplicates, and preserves explicit status dates', async () => {
+  const login = await call('POST', '/api/auth/login', {
+    product: 'talent', email: 'avvni.sharrma@righthead.in', password: TALENT_PASSWORD
+  });
+  assert.equal(login.status, 200);
+  cookie = login.headers.get('set-cookie').split(';')[0];
+  const row = {
+    name: 'Historical Candidate', role: 'Backend Engineer', recruiter: 'Maya', company: 'Acme', email: 'history@example.com', stage: 'Offer',
+    interview: { date: '2023-04-20', company: 'Acme', role: 'Backend Engineer', recruiter: 'Maya', mode: 'Video', time: '10:30 AM', candidateStatus: 'Offered', clientStatus: 'Selected', email: 'history@example.com', remarks: 'Original interview note', doj: '' }
+  };
+  const supplement = { ...row, interview: { ...row.interview, offeredDate: '2023-04-24', finalCall: 'Approved' } };
+  const first = await call('POST', '/api/candidates/import', { rows: [row, supplement] });
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.json, { rows: 2, candidatesCreated: 1, interviewsAdded: 1, duplicatesSkipped: 1, duplicateDetailsMerged: 1, invalidSkipped: 0 });
+  const again = await call('POST', '/api/candidates/import', { rows: [supplement] });
+  assert.equal(again.status, 200);
+  assert.equal(again.json.interviewsAdded, 0);
+  assert.equal(again.json.duplicatesSkipped, 1);
+  const imported = (await call('GET', '/api/candidates')).json.find(candidate => candidate.email === 'history@example.com');
+  assert.equal(imported.interviews.length, 1);
+  assert.equal(imported.interviews[0].date, '2023-04-20');
+  assert.equal(imported.interviews[0].remarks, 'Original interview note');
+  assert.equal(imported.interviews[0].offeredDate, '2023-04-24');
+  assert.equal(imported.doj || '', '');
+  assert.equal(imported.finalCall, 'Approved');
+  assert.deepEqual(imported.statusHistory.map(event => [event.stage, event.at.slice(0, 10)]), [['Offer', '2023-04-24']]);
+  const crmLogin = await call('POST', '/api/auth/login', {
+    product: 'crm', email: 'contact@righthead.in', password: CRM_PASSWORD
+  });
+  assert.equal(crmLogin.status, 200);
+  cookie = crmLogin.headers.get('set-cookie').split(';')[0];
+});
+
 test('Excel reader is served locally (CSP blocks CDNs)', async () => {
   const r = await call('GET', '/vendor/xlsx.full.min.js');
   assert.equal(r.status, 200);

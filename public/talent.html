@@ -25,7 +25,7 @@
       <h1>Talent Acquisition</h1>
       <p>Keep candidates organized from first application through hiring.</p>
     </div>
-    <button id="addCandidate" class="primary-button" type="button"><span aria-hidden="true">+</span> Add candidate</button>
+    <div class="heading-actions"><button id="importTracker" class="secondary-button" type="button">Import Existing Tracker</button><button id="addCandidate" class="primary-button" type="button"><span aria-hidden="true">+</span> Add candidate</button></div>
   </section>
   <section class="metrics" aria-label="Candidate pipeline summary">
     <article class="metric-card"><span>Total candidates</span><strong id="totalCount">0</strong><small>Across all stages</small></article>
@@ -33,6 +33,33 @@
     <article class="metric-card"><span>Interviews</span><strong id="interviewCount">0</strong><small>Currently at interview</small></article>
     <article class="metric-card"><span>Hired</span><strong id="hiredCount">0</strong><small>Successful hires</small></article>
   </section>
+  <div id="importNotice" class="weekly-message" role="status" hidden></div>
+  <nav class="tracker-tabs" role="tablist" aria-label="Talent Acquisition trackers">
+    <button type="button" role="tab" aria-selected="true" data-tab="interviews">Interview Tracker</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="offers">Shortlisted / Offered Tracker</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="weekly">Weekly Tracker</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="pipeline">Candidate Pipeline</button>
+  </nav>
+  <section class="tracker-view" id="interviewsView">
+    <section class="candidate-panel">
+      <div class="panel-heading"><div><h2>Interview Tracker</h2><p>Update candidate status and interview feedback in one place.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="interviews" placeholder="Search candidates" aria-label="Search interview tracker"></label><button class="primary-button" type="button" data-add-candidate>+ Add candidate</button><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Candidate</th><th>Recruiter</th><th>Interview date</th><th>Company</th><th>Profile</th><th>Mode</th><th>Time</th><th>Candidate status</th><th>Client status</th><th>Contact details</th><th>Remarks</th><th></th></tr></thead><tbody id="interviewRows"></tbody></table><div id="interviewEmpty" class="empty-state compact" hidden><strong>No interview records yet</strong><p>Add a candidate or import an existing tracker.</p></div></div>
+    </section>
+  </section>
+  <section class="tracker-view" id="offersView" hidden>
+    <section class="candidate-panel">
+      <div class="panel-heading"><div><h2>Shortlisted / Offered Tracker</h2><p>Candidate status stays connected to the Interview Tracker.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="offers" placeholder="Search candidates" aria-label="Search shortlisted and offered tracker"></label><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th>TA Name</th><th>Month</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Status</th><th>Final Call</th><th>DOJ</th><th>Remarks</th><th></th></tr></thead><tbody id="offerRows"></tbody></table><div id="offerEmpty" class="empty-state compact" hidden><strong>No shortlisted or offered candidates</strong><p>Change a candidate status to Shortlisted, Offer, or Hired to see them here.</p></div></div>
+    </section>
+  </section>
+  <section class="tracker-view" id="weeklyView" hidden>
+    <section class="candidate-panel">
+      <div class="panel-heading"><div><h2>Weekly Tracker</h2><p>Daily counts are calculated from candidate records. Targets and achievements are editable.</p></div><div class="filters"><label class="week-picker">Week starting Monday<input id="weekStart" type="date"></label><button id="addRecruiter" class="secondary-button" type="button">+ Add recruiter</button><button id="saveWeekly" class="primary-button" type="button">Save weekly entries</button><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
+      <div id="weeklyMessage" class="weekly-message" role="status" hidden></div>
+      <div id="weeklyRows" class="weekly-trackers"></div>
+    </section>
+  </section>
+  <section class="tracker-view" id="pipelineView" hidden>
   <section class="candidate-panel">
     <div class="panel-heading">
       <div><h2>Candidate pipeline</h2><p>Search, review, and update your candidates.</p></div>
@@ -51,6 +78,7 @@
       <div id="noResults" class="empty-state compact" hidden><strong>No matching candidates</strong><p>Try a different search or stage.</p></div>
     </div>
   </section>
+  </section>
   <footer><span>© <span class="brand-orange">Right Head</span> <span class="brand-blue">Management</span></span><a href="mailto:contact@righthead.in">Need help? Contact us</a></footer>
 </main>
 <dialog id="candidateDialog" aria-labelledby="dialogTitle">
@@ -61,6 +89,15 @@
       <label class="full">Full name <span>*</span><input name="name" required maxlength="200" autocomplete="name"></label>
       <label>Position <span>*</span><input name="role" required maxlength="200" placeholder="e.g. Product Designer"></label>
       <label>Stage<select name="stage"></select></label>
+      <label>Company<input name="company" maxlength="200"></label>
+      <label>Recruiter / TA Name<input name="recruiter" maxlength="200"></label>
+      <label>Month<input name="month" type="month"></label>
+      <label>Interview date<input name="interviewDate" type="date"></label>
+      <label>Shared date<input name="sharedDate" type="date"></label>
+      <label>Final call<input name="finalCall" maxlength="100" placeholder="e.g. Selected"></label>
+      <label>DOJ<input name="doj" type="date"></label>
+      <label class="full">Interview feedback<textarea name="feedback" rows="3" maxlength="6000"></textarea></label>
+      <label class="full">Remarks<textarea name="remarks" rows="2" maxlength="6000"></textarea></label>
       <label>Email<input name="email" type="email" maxlength="254" autocomplete="email"></label>
       <label>Phone<input name="phone" type="tel" maxlength="50" autocomplete="tel"></label>
       <label class="full">Source<input name="source" maxlength="200" placeholder="e.g. LinkedIn, referral"></label>
@@ -70,6 +107,19 @@
     <div class="dialog-actions"><button id="cancelDialog" class="secondary-button" type="button">Cancel</button><button id="saveCandidate" class="primary-button" type="submit">Save candidate</button></div>
   </form>
 </dialog>
+<dialog id="trackerImportDialog" class="import-dialog" aria-labelledby="importDialogTitle">
+  <form id="trackerImportForm" method="dialog">
+    <div class="dialog-heading"><div><span class="eyebrow">HISTORICAL DATA</span><h2 id="importDialogTitle">Import Existing Tracker</h2><p>Upload Excel or CSV, confirm the column mapping, and review rows before saving.</p></div><button class="close-button" type="button" data-close-import aria-label="Close dialog">×</button></div>
+    <label class="import-file">Excel or CSV file<input id="trackerImportFile" type="file" accept=".xlsx,.xls,.csv,.tsv" required></label>
+    <div class="paste-import"><label for="trackerPasteData">Or paste rows from Excel, Google Sheets, or CSV</label><textarea id="trackerPasteData" rows="4" placeholder="Paste the header row and tracker data here"></textarea><button id="parsePastedTracker" class="secondary-button" type="button">Preview pasted data</button></div>
+    <label id="importSheetWrap" class="header-row-select" hidden>Worksheet<select id="importSheet"></select><span>Import interview worksheets separately.</span></label>
+    <div id="importError" class="form-error" role="alert"></div>
+    <section id="importMapping" class="import-mapping" hidden><h3>Column mapping</h3><p>We matched common column names automatically. Change a mapping if needed.</p><label class="header-row-select">Header row<select id="importHeaderRow"></select></label><div id="importMappingFields" class="mapping-grid"></div></section>
+    <section id="importPreviewSection" class="import-preview-section" hidden><div class="import-preview-heading"><div><h3>Preview and correct</h3><p id="importSummary"></p></div><span class="preview-hint">Edit cells directly before import</span></div><div class="table-wrap import-preview-wrap"><table class="import-preview-table"><thead id="importPreviewHead"></thead><tbody id="importPreviewRows"></tbody></table></div><div class="preview-pagination"><button id="importPrevPage" class="secondary-button" type="button">Previous</button><span id="importPageLabel"></span><button id="importNextPage" class="secondary-button" type="button">Next</button></div></section>
+    <div class="dialog-actions"><button class="secondary-button" type="button" data-close-import>Cancel</button><button id="confirmImport" class="primary-button" type="button" disabled>Import records</button></div>
+  </form>
+</dialog>
+<script src="/vendor/xlsx.full.min.js"></script>
 <script src="talent.js"></script>
 </body>
 </html>
