@@ -76,6 +76,11 @@ h1 { margin-top: 12px; font-size: 35px; line-height: 1.2; }
 .metric-card span { display: block; color: var(--muted); font-size: 11px; font-weight: 600; }
 .metric-card strong { display: block; margin: 9px 0 3px; color: var(--ink); font: 700 28px/1 Manrope, sans-serif; letter-spacing: -.04em; }
 .metric-card small { color: var(--subtle); font-size: 10px; }
+.candidate-date-filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; margin: -5px 0 18px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.candidate-date-filters > strong { align-self: center; margin-right: auto; color: var(--ink); font-size: 11px; }
+.candidate-date-filters label { display: grid; gap: 5px; margin: 0; color: var(--muted); font-size: 9px; }
+.candidate-date-filters input, .candidate-date-filters select { min-width: 120px; height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 10px; }
+.candidate-date-filters button { min-height: 34px; padding: 0 11px; font-size: 10px; }
 .candidate-panel { overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); box-shadow: var(--shadow); }
 .tracker-tabs { display: flex; gap: 5px; margin: 4px 0 16px; padding: 5px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .tracker-tabs button { flex: 0 0 auto; min-height: 36px; padding: 0 14px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; cursor: pointer; }
@@ -90,6 +95,11 @@ h1 { margin-top: 12px; font-size: 35px; line-height: 1.2; }
 .week-picker { display: grid; gap: 4px; color: var(--muted); font-size: 10px; font-weight: 700; }
 .week-picker input { height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 11px; }
 .weekly-message { margin: 0 22px 14px; padding: 10px 12px; border: 1px solid var(--brand-border); border-radius: 6px; background: var(--brand-soft); color: var(--brand); font-size: 11px; }
+.bulk-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin: -8px 0 13px; padding: 10px 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 11px; }
+.bulk-actions > span { margin-right: auto; }
+.danger-button { min-height: 34px; padding: 0 12px; border: 1px solid var(--danger-border); border-radius: 7px; background: var(--danger-bg); color: var(--danger); font-size: 10px; font-weight: 700; cursor: pointer; }
+.danger-button:hover { filter: brightness(.97); }
+.table-wrap input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--brand); cursor: pointer; }
 .weekly-trackers { padding: 0 18px 18px; }
 .recruiter-week { margin: 0 0 16px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
 .recruiter-week-heading { display: flex; align-items: center; justify-content: space-between; padding: 12px 15px; background: var(--surface-muted); }
@@ -120,7 +130,7 @@ td { padding: 13px 16px; border-top: 1px solid var(--line-soft); color: var(--mu
 .candidate-email { display: block; margin-top: 3px; color: var(--subtle); font-size: 10px; }
 .raw-status { display: block; margin-top: 4px; color: var(--subtle); font-size: 9px; }
 .stage-pill { display: inline-flex; align-items: center; padding: 5px 9px; border: 1px solid var(--brand-border); border-radius: 99px; background: var(--brand-soft); color: var(--brand); font-size: 10px; font-weight: 600; }
-.stage-Applied, .stage-Screening, .stage-Interview, .stage-Offer, .stage-Hired, .stage-Rejected { border-color: var(--brand-border); background: var(--brand-soft); color: var(--brand); }
+.stage-Screening, .stage-Interview, .stage-Offer, .stage-Joining, .stage-Rejected, .stage-Blacklisted { border-color: var(--brand-border); background: var(--brand-soft); color: var(--brand); }
 .stage-select { min-width: 115px; padding: 6px 25px 6px 9px; border: 1px solid var(--brand-border); border-radius: 99px; background: var(--brand-soft); color: var(--ink); font-size: 10px; }
 .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .action-button { padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 600; cursor: pointer; }
@@ -181,15 +191,45 @@ dialog form { padding: 24px; }
 .import-preview-table input { width: 100%; min-height: 30px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 10px; }
 .import-preview-table .duplicate-cell { color: var(--danger); font-size: 9px; font-weight: 700; }
 .import-preview-table tr.is-duplicate { background: var(--danger-bg); }
+.import-worksheets { margin-top: 17px; }
+.import-sheet-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 7px; margin: 12px 0; }
+.import-sheet-choice { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 10px; }
+.import-sheet-choice input { width: 15px; height: 15px; accent-color: var(--brand); }
+.import-sheet-choice small { margin-left: auto; color: var(--muted); }
+.import-sheet-details { margin: 8px 0; color: var(--muted); font-size: 10px; }
+.import-raw-preview { min-width: 850px; }
+.import-raw-preview td { max-width: 230px; padding: 7px; overflow-wrap: anywhere; }
+.import-raw-preview td:first-child { min-width: 54px; }
+.cv-share-table { min-width: 1900px; }
+.cv-share-table td { max-width: 250px; white-space: normal; overflow-wrap: anywhere; }
+.cv-share-table .date-band th { padding: 10px 14px; background: #e7f0fb; color: #173d70; text-align: left; font-size: 11px; }
+.cv-share-table .date-band span { margin-left: 9px; color: #526980; font-weight: 500; }
+.cv-share-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#cvShareDialog { width: min(760px, calc(100% - 28px)); }
+.historical-imports { margin-top: 18px; }
+.historical-import-report-list { display: grid; gap: 8px; padding: 0 22px 18px; }
+.historical-import-report { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 4px 14px; padding: 11px 13px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface-muted); color: var(--muted); font-size: 10px; }
+.historical-import-report strong { color: var(--ink); font-size: 11px; }
+.historical-import-report small { color: var(--subtle); }
+.historical-import-report span { grid-column: 1 / -1; }
+.historical-import-report > small:last-child { grid-column: 1 / -1; }
+.historical-import-report a { grid-column: 1 / -1; color: var(--brand); font-weight: 700; text-decoration: none; }
+.historical-import-report a:hover { text-decoration: underline; }
 .preview-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 8px 3px; color: var(--muted); font-size: 10px; }
 .preview-pagination .secondary-button { min-height: 30px; padding: 0 10px; font-size: 10px; }
 @media (max-width: 720px) {
+  .candidate-date-filters { align-items: stretch; }
+  .candidate-date-filters > strong { width: 100%; }
+  .candidate-date-filters label { flex: 1 1 42%; }
+  .candidate-date-filters input, .candidate-date-filters select { width: 100%; min-width: 0; }
+  .candidate-date-filters button { flex: 1; }
   .topbar { height: 68px; padding: 0 16px; }
   .topbar nav { gap: 13px; }
   .workspace { width: calc(100% - 30px); }
   .page-heading { align-items: flex-start; flex-direction: column; margin: 34px 0 21px; }
   .heading-actions { width: 100%; }
   .heading-actions > button { flex: 1; }
+  .bulk-actions { flex-wrap: wrap; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
   .metric-card { min-height: 110px; padding: 15px; }
   .panel-heading { align-items: flex-start; flex-direction: column; padding: 17px; }

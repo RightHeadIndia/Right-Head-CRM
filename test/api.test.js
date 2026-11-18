@@ -131,6 +131,10 @@ test('tracker import keeps historical interviews on one candidate, skips duplica
   assert.equal(imported.doj || '', '');
   assert.equal(imported.finalCall, 'Approved');
   assert.deepEqual(imported.statusHistory.map(event => [event.stage, event.at.slice(0, 10)]), [['Offer', '2023-04-24']]);
+  const bulkDelete = await call('DELETE', '/api/candidates', { ids: [imported.id, imported.id] });
+  assert.equal(bulkDelete.status, 200);
+  assert.equal(bulkDelete.json.deleted, 1);
+  assert.equal((await call('GET', '/api/candidates')).json.some(candidate => candidate.id === imported.id), false);
   const crmLogin = await call('POST', '/api/auth/login', {
     product: 'crm', email: 'contact@righthead.in', password: CRM_PASSWORD
   });

@@ -9,6 +9,7 @@ const { backup: sqliteBackup } = require('node:sqlite');
 const { openDatabase: openSQLiteDatabase, readDatabase: readSQLiteDatabase, writeDatabase: writeSQLiteDatabase, readRecord: readSQLiteRecord, updateRecords: updateSQLiteRecords } = require('./lib/database');
 const { openDatabase: openPostgresDatabase, readDatabase: readPostgresDatabase, writeDatabase: writePostgresDatabase, readRecord: readPostgresRecord, updateRecords: updatePostgresRecords, flush, closeDatabase, tryAdvisoryLock } = require('./lib/database-postgres');
 const { waitForPostgresWrites } = require('./lib/postgres-response-barrier');
+const { importWorkbook: importHistoricalWorkbook, rebuildWorkbook: rebuildHistoricalWorkbook } = require('./lib/talent-history-import');
 
 const PORT = process.env.PORT || 3000;
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
@@ -72,7 +73,7 @@ async function acquireMailThreadLock(clientId, email) {
 
 const app = express();
 if (process.env.CRM_TRUST_PROXY === '1' || process.env.NODE_ENV === 'production' || process.env.RENDER) app.set('trust proxy', 1);
-app.use(express.json({ limit: '5mb', verify(req, res, buffer) { req.rawBody = Buffer.from(buffer); } }));
+app.use(express.json({ limit: '30mb', verify(req, res, buffer) { req.rawBody = Buffer.from(buffer); } }));
 app.use('/api', (req, res, next) => {
   res.set({ 'Cache-Control': 'no-store', Pragma: 'no-cache' });
   next();
@@ -138,7 +139,7 @@ function sessionProduct(req) {
 function productForPath(pathname) {
   return ['/talent.html', '/talent.css', '/talent.js'].includes(pathname) ||
     pathname === '/api/candidates' || pathname.startsWith('/api/candidates/') ||
-    pathname === '/api/ta-weekly' || pathname.startsWith('/api/ta-weekly/') || pathname === '/api/ta-export.xlsx'
+    pathname === '/api/ta-weekly' || pathname.startsWith('/api/ta-weekly/') || pathname === '/api/ta-export.xlsx' || pathname === '/api/ta-imports' || pathname.startsWith('/api/ta-imports/') || pathname === '/api/ta-cv-shares' || pathname.startsWith('/api/ta-cv-shares/')
     ? 'talent'
     : 'crm';
 }
@@ -235,7 +236,23 @@ const save = db => writeDatabase(database, db);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const now = () => new Date().toISOString();
 const STAGES = ['new', 'contacted', 'replied', 'onboarded', 'rejected'];
-const CANDIDATE_STAGES = ['Unspecified', 'Applied', 'Screening', 'Interview', 'Shortlisted', 'Offer', 'Hired', 'Rejected'];
+const CANDIDATE_STAGES = ['Screening', 'Interview', 'Shortlisted', 'Offer', 'Joining', 'Rejected', 'Blacklisted'];
+const LEGACY_CANDIDATE_STAGES = { Unspecified: 'Screening', Applied: 'Screening', Hired: 'Joining' };
+function candidateImportStage(stage) { return LEGACY_CANDIDATE_STAGES[stage] || (CANDIDATE_STAGES.includes(stage) ? stage : 'Screening'); }
+function cleanCvShareInput(value, partial = false) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'CV share data must be an object' };
+  const limits = { sharedAt: 10, recruiter: 200, shareStatus: 250, company: 200, role: 200, candidateName: 200, designation: 200, location: 200, workLocation: 250, experience: 100, currentCompany: 200, currentCtc: 100, expectedCtc: 100, noticePeriod: 120, remarks: 3000, phone: 50, email: 254 };
+  const clean = {};
+  for (const [field, max] of Object.entries(limits)) {
+    if (value[field] === undefined) continue;
+    if (value[field] !== null && typeof value[field] !== 'string') return { error: `${field} must be text` };
+    clean[field] = String(value[field] || '').trim().slice(0, max);
+  }
+  if (!partial && !clean.candidateName) return { error: 'Candidate name is required.' };
+  if (clean.email && !EMAIL_PATTERN.test(clean.email)) return { error: 'Email is not valid.' };
+  if (clean.sharedAt && (!/^\d{4}-\d{2}-\d{2}$/.test(clean.sharedAt) || Number.isNaN(new Date(`${clean.sharedAt}T00:00:00Z`).getTime()))) return { error: 'Choose a valid share date.' };
+  return { clean };
+}
 const CALLS = ['not_called', 'connected', 'no_answer', 'busy', 'callback'];
 const EMAIL_FOLLOW_UP_HOURS = 48;
 const LEGACY_SEQUENCE_DAYS = [1, 2, 4, 7, 10];
@@ -471,7 +488,13 @@ app.get('/api/backup', asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/candidates', (req, res) => {
-  const candidates = load().candidates;
+  const db = load(), candidates = db.candidates;
+  let migrated = false;
+  for (const candidate of candidates) {
+    if (LEGACY_CANDIDATE_STAGES[candidate.stage]) { candidate.stage = LEGACY_CANDIDATE_STAGES[candidate.stage]; migrated = true; }
+    for (const event of candidate.statusHistory || []) if (LEGACY_CANDIDATE_STAGES[event.stage]) { event.stage = LEGACY_CANDIDATE_STAGES[event.stage]; migrated = true; }
+  }
+  if (migrated) save(db);
   res.json(candidates.slice().sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))));
 });
 
@@ -482,10 +505,10 @@ app.post('/api/candidates', (req, res) => {
   const candidate = {
     id: uid(),
     ...result.clean,
-    stage: result.clean.stage || 'Applied',
+    stage: result.clean.stage || 'Screening',
     createdAt: now(),
     updatedAt: now(),
-    statusHistory: [{ stage: result.clean.stage || 'Applied', at: now(), ...(result.clean.recruiter ? { recruiter: result.clean.recruiter } : {}) }]
+    statusHistory: [{ stage: result.clean.stage || 'Screening', at: now(), ...(result.clean.recruiter ? { recruiter: result.clean.recruiter } : {}) }]
   };
   db.candidates.push(candidate);
   save(db);
@@ -505,7 +528,7 @@ app.post('/api/candidates/import', asyncRoute(async (req, res) => {
     const statusDates = [
       { stage: 'Shortlisted', at: interview.shortlistedDate },
       { stage: 'Offer', at: interview.offeredDate },
-      { stage: 'Hired', at: interview.doj }
+      { stage: 'Joining', at: interview.doj }
     ];
     record.statusHistory ||= [];
     let changed = false;
@@ -518,7 +541,7 @@ app.post('/api/candidates/import', asyncRoute(async (req, res) => {
   for (const source of rows) {
     const raw = source && typeof source === 'object' ? source : {};
     const interview = raw.interview && typeof raw.interview === 'object' ? raw.interview : {};
-    const fields = { name: raw.name, company: raw.company || '', recruiter: raw.recruiter || '', email: raw.email || '', phone: raw.phone || '', month: raw.month || '', stage: CANDIDATE_STAGES.includes(raw.stage) ? raw.stage : 'Unspecified', imported: true, sharedDate: interview.sharedDate || '', shortlistedDate: interview.shortlistedDate || '', offeredDate: interview.offeredDate || '', doj: interview.doj || '', finalCall: interview.finalCall || '' };
+    const fields = { name: raw.name, company: raw.company || '', recruiter: raw.recruiter || '', email: raw.email || '', phone: raw.phone || '', month: raw.month || '', stage: candidateImportStage(raw.stage), imported: true, sharedDate: interview.sharedDate || '', shortlistedDate: interview.shortlistedDate || '', offeredDate: interview.offeredDate || '', doj: interview.doj || '', finalCall: interview.finalCall || '' };
     if (raw.role) fields.role = raw.role;
     const checked = cleanCandidateInput(fields, true);
     const cleanInterview = cleanCandidateInput({ interviews: [interview] }, true);
@@ -547,7 +570,7 @@ app.post('/api/candidates/import', asyncRoute(async (req, res) => {
       }
       const candidateFields = { sharedDate: incomingInterview.sharedDate, shortlistedDate: incomingInterview.shortlistedDate, offeredDate: incomingInterview.offeredDate, doj: incomingInterview.doj, finalCall: incomingInterview.finalCall };
       for (const [field, value] of Object.entries(candidateFields)) if (value && !record[field]) { record[field] = value; enriched = true; }
-      if (clean.stage !== 'Unspecified' && record.stage !== clean.stage) { record.stage = clean.stage; enriched = true; }
+      if (clean.stage !== 'Screening' && record.stage !== clean.stage) { record.stage = clean.stage; enriched = true; }
       if (!record.month && clean.month) { record.month = clean.month; enriched = true; }
       if (matchingLegacy) {
         for (const [field, value] of Object.entries({ interviewMode: incomingInterview.mode, interviewTime: incomingInterview.time, interviewStatus: incomingInterview.candidateStatus, clientStatus: incomingInterview.clientStatus, contactDetails: incomingInterview.contactDetails, remarks: incomingInterview.remarks })) if (value && !record[field]) { record[field] = value; enriched = true; }
@@ -561,7 +584,7 @@ app.post('/api/candidates/import', asyncRoute(async (req, res) => {
     if (!candidate) { db.candidates.push(record); result.candidatesCreated++; }
     for (const field of ['role', 'company', 'recruiter', 'email', 'phone']) if (!record[field] && clean[field]) record[field] = clean[field];
     if (!record.month && clean.month) record.month = clean.month;
-    if (clean.stage !== 'Unspecified') record.stage = clean.stage;
+    if (clean.stage !== 'Screening') record.stage = clean.stage;
     if (incomingInterview.sharedDate && !record.sharedDate) record.sharedDate = incomingInterview.sharedDate;
     if (incomingInterview.shortlistedDate && !record.shortlistedDate) record.shortlistedDate = incomingInterview.shortlistedDate;
     if (incomingInterview.offeredDate && !record.offeredDate) record.offeredDate = incomingInterview.offeredDate;
@@ -592,6 +615,20 @@ app.put('/api/candidates/:id', async (req, res, next) => {
   try { await flush(database); } catch (error) { return next(error); }
   res.json(candidate);
 });
+
+app.delete('/api/candidates', asyncRoute(async (req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids) || !ids.length || ids.length > 5000) return res.status(400).json({ error: 'Select between 1 and 5000 candidates to delete.' });
+  const uniqueIds = [...new Set(ids.filter(id => typeof id === 'string' && id.length <= 100))];
+  if (!uniqueIds.length) return res.status(400).json({ error: 'No valid candidate IDs were provided.' });
+  const db = load(), selected = new Set(uniqueIds), before = db.candidates.length;
+  db.candidates = db.candidates.filter(candidate => !selected.has(candidate.id));
+  const deleted = before - db.candidates.length;
+  if (!deleted) return res.status(404).json({ error: 'No selected candidates were found.' });
+  save(db);
+  await flush(database);
+  res.json({ ok: true, deleted });
+}));
 
 app.delete('/api/candidates/:id', async (req, res, next) => {
   const db = load();
@@ -646,6 +683,55 @@ app.delete('/api/ta-weekly/:id', asyncRoute(async (req, res) => {
   await flush(database);
   res.json({ ok: true });
 }));
+app.get('/api/ta-cv-shares', (req, res) => {
+  const rows = load().taCvShares.slice().sort((a, b) => String(b.sharedAt || '').localeCompare(String(a.sharedAt || '')) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  res.json(rows);
+});
+app.post('/api/ta-cv-shares', asyncRoute(async (req, res) => {
+  const { clean, error } = cleanCvShareInput(req.body);
+  if (error) return res.status(400).json({ error });
+  const db = load(); db.taCvShares ||= [];
+  const record = { id: uid(), ...clean, imported: false, createdAt: now(), updatedAt: now() };
+  db.taCvShares.push(record); save(db); await flush(database); res.status(201).json(record);
+}));
+app.put('/api/ta-cv-shares/:id', asyncRoute(async (req, res) => {
+  const { clean, error } = cleanCvShareInput(req.body, true);
+  if (error) return res.status(400).json({ error });
+  const db = load(), record = db.taCvShares.find(item => item.id === req.params.id);
+  if (!record) return res.status(404).json({ error: 'CV share was not found.' });
+  Object.assign(record, clean, { updatedAt: now() }); save(db); await flush(database); res.json(record);
+}));
+app.delete('/api/ta-cv-shares/:id', asyncRoute(async (req, res) => {
+  const db = load(), originalLength = db.taCvShares.length;
+  db.taCvShares = db.taCvShares.filter(item => item.id !== req.params.id);
+  if (db.taCvShares.length === originalLength) return res.status(404).json({ error: 'CV share was not found.' });
+  save(db); await flush(database); res.json({ ok: true });
+}));
+app.get('/api/ta-imports', (req, res) => {
+  const db = load();
+  res.json(db.taHistoricalImports.slice().sort((a, b) => String(b.updatedAt || b.importedAt).localeCompare(String(a.updatedAt || a.importedAt))).map(({ id, sourceName, importedAt, updatedAt, report }) => ({ id, sourceName, importedAt, updatedAt, report })));
+});
+app.get('/api/ta-imports/:id.xlsx', (req, res) => {
+  const archive = load().taHistoricalImports.find(item => item.id === req.params.id);
+  if (!archive) return res.status(404).json({ error: 'Historical workbook was not found.' });
+  const XLSX = require('xlsx'), workbook = rebuildHistoricalWorkbook(archive);
+  res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Content-Disposition': `attachment; filename="${path.basename(archive.sourceName, path.extname(archive.sourceName)).replace(/[^a-z0-9_-]+/gi, '-')}-archive.xlsx"`, 'Cache-Control': 'no-store' });
+  res.send(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }));
+});
+app.post('/api/ta-imports', asyncRoute(async (req, res) => {
+  const encoded = req.body?.workbookBase64, selected = req.body?.sheets;
+  if (typeof encoded !== 'string' || encoded.length > 28_000_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return res.status(400).json({ error: 'Upload a valid Excel workbook up to 20 MB.' });
+  if (!Array.isArray(selected) || !selected.length || selected.length > 50 || selected.some(name => typeof name !== 'string')) return res.status(400).json({ error: 'Select one or more worksheets to import.' });
+  const buffer = Buffer.from(encoded, 'base64');
+  if (buffer.length > 20 * 1024 * 1024) return res.status(413).json({ error: 'Excel workbooks are limited to 20 MB.' });
+  let db, result;
+  try {
+    db = load();
+    result = importHistoricalWorkbook(db, buffer, selected, req.body.sourceName || 'Historical workbook');
+  } catch (error) { return res.status(400).json({ error: `Could not import this workbook: ${error.message}` }); }
+  if (result.worksheets.some(sheet => sheet.status === 'imported')) { save(db); await flush(database); }
+  res.json(result);
+}));
 app.get('/api/ta-export.xlsx', asyncRoute(async (req, res) => {
   const weekStart = String(req.query.week || '');
   if (!validWeekStart(weekStart)) return res.status(400).json({ error: 'Choose a Monday as the week start.' });
@@ -653,7 +739,8 @@ app.get('/api/ta-export.xlsx', asyncRoute(async (req, res) => {
   const db = load(), workbook = XLSX.utils.book_new();
   const candidates = db.candidates;
   const interviewRows = candidates.flatMap(c => (c.interviews?.length ? c.interviews : [{ date: c.interviewDate, company: c.company, role: c.role, recruiter: c.recruiter, mode: c.interviewMode, time: c.interviewTime, candidateStatus: c.interviewStatus || c.stage, clientStatus: c.clientStatus, email: c.email, phone: c.phone, contactDetails: c.contactDetails, remarks: c.remarks || c.feedback }]).map(i => ({ Candidate: c.name, Recruiter: i.recruiter || c.recruiter || '', 'Interview Date': i.date || '', Company: i.company || c.company || '', Profile: i.role || c.role || '', 'Interview Mode': i.mode || '', 'Interview Time': i.time || '', 'Candidate Status': i.candidateStatus || c.stage || '', 'Client Status': i.clientStatus || '', Email: i.email || c.email || '', Phone: i.phone || c.phone || '', 'Contact Details': i.contactDetails || '', Remarks: i.remarks || '' })));
-  const offerRows = candidates.filter(c => ['Shortlisted', 'Offer', 'Hired'].includes(c.stage)).map(c => ({ 'TA Name': c.recruiter || '', Month: c.month || (c.doj ? c.doj.slice(0, 7) : weekStart.slice(0, 7)), Company: c.company || '', Profile: c.role || '', Candidate: c.name, Status: c.stage, 'Final Call': c.finalCall || '', DOJ: c.doj || '', Remarks: c.remarks || '' }));
+  const offerRows = candidates.filter(c => ['Shortlisted', 'Offer', 'Joining'].includes(c.stage)).map(c => ({ 'TA Name': c.recruiter || '', Month: c.month || (c.doj ? c.doj.slice(0, 7) : weekStart.slice(0, 7)), Company: c.company || '', Profile: c.role || '', Candidate: c.name, Status: c.stage, 'Final Call': c.finalCall || '', 'Joining Date': c.doj || '', Remarks: c.remarks || '' }));
+  const cvShareRows = (db.taCvShares || []).map(share => ({ 'Share Date': share.sharedAt || '', Recruiter: share.recruiter || '', 'Share Status / Time': share.shareStatus || '', Company: share.company || '', Profile: share.role || '', Candidate: share.candidateName || '', Designation: share.designation || '', Location: share.location || '', 'Work Location': share.workLocation || '', Experience: share.experience || '', 'Current Company': share.currentCompany || '', 'Current CTC': share.currentCtc || '', 'Expected CTC': share.expectedCtc || '', 'Notice Period': share.noticePeriod || '', Remarks: share.remarks || '', Phone: share.phone || '', Email: share.email || '' }));
   const reports = db.weeklyReports.filter(r => r.weekStart === weekStart);
   const weeklyRows = [];
   for (const recruiter of new Set([...candidates.flatMap(c => [c.recruiter, ...(c.interviews || []).map(i => i.recruiter)]).filter(Boolean), ...reports.map(r => r.recruiter)])) {
@@ -664,11 +751,11 @@ app.get('/api/ta-export.xlsx', asyncRoute(async (req, res) => {
         const day = TA_DAYS[offset], dayKey = date.toISOString().slice(0, 10);
         const count = candidates.filter(c => {
           if (metric === TA_METRICS[0]) return c.interviews?.length ? c.interviews.some(i => String(i.recruiter || c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && String(i.sharedDate || '').slice(0, 10) === dayKey) : String(c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && (c.sharedDate || (c.imported ? '' : c.createdAt) || '').slice(0, 10) === dayKey;
-          const stage = metric === TA_METRICS[1] ? 'Shortlisted' : metric === TA_METRICS[2] ? 'Offer' : 'Hired';
+          const stage = metric === TA_METRICS[1] ? 'Shortlisted' : metric === TA_METRICS[2] ? 'Offer' : 'Joining';
           return (c.statusHistory || []).some(h => String(h.recruiter || c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && h.at.slice(0, 10) === dayKey && h.stage === stage);
         }).length;
         const manual = reports.find(r => r.recruiter === recruiter)?.manual?.[metric]?.[day] || {};
-        row[`${day} Count/Names`] = metric === TA_METRICS[3] ? candidates.filter(c => (c.statusHistory || []).some(h => String(h.recruiter || c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && h.at.slice(0, 10) === dayKey && h.stage === 'Hired')).map(c => c.name).join(', ') : count;
+        row[`${day} Count/Names`] = metric === TA_METRICS[3] ? candidates.filter(c => (c.statusHistory || []).some(h => String(h.recruiter || c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && h.at.slice(0, 10) === dayKey && h.stage === 'Joining')).map(c => c.name).join(', ') : count;
         row[`${day} Target`] = manual.target; row[`${day} Achievement`] = manual.achievement;
       }
       weeklyRows.push(row);
@@ -677,6 +764,7 @@ app.get('/api/ta-export.xlsx', asyncRoute(async (req, res) => {
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(interviewRows), 'Interview Tracker');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(offerRows), 'Shortlisted Offered');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(weeklyRows), 'Weekly Tracker');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(cvShareRows), 'CV Shared');
   res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Content-Disposition': `attachment; filename="talent-trackers-${weekStart}.xlsx"`, 'Cache-Control': 'no-store' });
   res.send(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }));
 }));

@@ -7,7 +7,7 @@ document.getElementById('loginTitle').textContent = product === 'talent' ? 'Tale
 document.getElementById('loginDescription').textContent = product === 'talent'
   ? 'Sign in with your Right Head talent account.'
   : 'Sign in with your Right Head CRM account.';
-document.title = `${product === 'talent' ? 'Talent Acquisition' : 'CRM'} sign in - Right Head`;
+document.title = `${product === 'talent' ? 'Talent Acquisition' : 'CRM'} sign in - Right Head HR Consultants`;
 fetch('/api/auth/session').then(r => r.json()).then(session => {
   if (!emailInput.value) emailInput.value = session.loginEmails?.[product] || '';
   if (session.authenticated && session.product === product) location.replace(nextPage);

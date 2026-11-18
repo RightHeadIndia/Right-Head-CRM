@@ -82,7 +82,18 @@ const pg = require('pg');
 pg.Pool = FakePool;
 process.env.DATABASE_URL = 'postgres://test:test@localhost/test';
 process.env.CRM_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
-const { openDatabase, readDatabase, writeDatabase, flush, closeDatabase } = require('../lib/database-postgres');
+const { openDatabase, readDatabase, writeDatabase, flush, closeDatabase, postgresConnectionOptions } = require('../lib/database-postgres');
+
+test('PostgreSQL SSL settings respect connection-string modes without the pg config conflict', () => {
+  const current = postgresConnectionOptions('postgresql://user:pass@db.example.test/app?sslmode=require&channel_binding=require', '');
+  assert.equal(new URL(current.connectionString).searchParams.get('sslmode'), 'verify-full');
+  assert.equal(Object.hasOwn(current, 'ssl'), false);
+  const compatible = postgresConnectionOptions('postgresql://user:pass@db.example.test/app?sslmode=require&uselibpqcompat=true', '');
+  assert.equal(new URL(compatible.connectionString).searchParams.get('sslmode'), 'require');
+  assert.equal(Object.hasOwn(compatible, 'ssl'), false);
+  assert.equal(postgresConnectionOptions('postgresql://user:pass@db.example.test/app', 'disable').ssl, false);
+  assert.deepEqual(postgresConnectionOptions('postgresql://user:pass@db.example.test/app').ssl, { rejectUnauthorized: false });
+});
 
 test('PostgreSQL adapter refreshes after a conflict and accepts a later write', async () => {
   FakePool.records = new Map();

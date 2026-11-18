@@ -1,8 +1,9 @@
 'use strict';
 const { Client } = require('pg');
+const { postgresConnectionOptions } = require('../lib/database-postgres');
 (async () => {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set. Copy the Neon connection string into your environment.');
-  const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false }, connectionTimeoutMillis: 10000 });
+  const client = new Client({ ...postgresConnectionOptions(), connectionTimeoutMillis: 10000 });
   try {
     await client.connect();
     const ping = await client.query('SELECT current_database() AS database_name, current_user AS database_user');

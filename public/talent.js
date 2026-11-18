@@ -1,7 +1,9 @@
-const STAGES = ['Unspecified', 'Applied', 'Screening', 'Interview', 'Shortlisted', 'Offer', 'Hired', 'Rejected'];
+const STAGES = ['Screening', 'Interview', 'Shortlisted', 'Offer', 'Joining', 'Rejected', 'Blacklisted'];
 const $ = selector => document.querySelector(selector);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 let candidates = [];
+let cvShares = [];
+const selectedCandidateIds = new Set();
 let busy = false;
 const api = async (url, method = 'GET', body) => {
   const response = await fetch('/api' + url, {
@@ -36,11 +38,53 @@ function displayDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
 }
+function normalizedDateKey(value) {
+  if (!value) return '';
+  const text = String(value).trim();
+  let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (match) return `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
+  match = text.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  if (match) return `${match[3]}-${String(match[2]).padStart(2, '0')}-${String(match[1]).padStart(2, '0')}`;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? '' : localDateKey(parsed);
+}
+function candidateDate(candidate, entry) {
+  return normalizedDateKey(entry?.date || candidate.interviewDate || candidate.sharedDate || candidate.doj || candidate.offeredDate || candidate.shortlistedDate || candidate.createdAt);
+}
+function offerDate(candidate) {
+  return normalizedDateKey(candidate.doj || candidate.offeredDate || candidate.shortlistedDate || candidate.createdAt);
+}
+function cvShareDate(share) { return normalizedDateKey(share.sharedAt || share.createdAt); }
+function compareDates(left, right) {
+  const a = normalizedDateKey(left), b = normalizedDateKey(right);
+  if (!a || !b) return a ? -1 : b ? 1 : 0;
+  return ($('#dateSort').value === 'oldest' ? 1 : -1) * a.localeCompare(b);
+}
+function dateFilterMatch(value) {
+  const key = normalizedDateKey(value), month = $('#filterMonth').value, date = $('#filterDate').value, year = $('#filterYear').value;
+  if (!month && !date && !year) return true;
+  if (!key) return false;
+  return (!month || key.slice(5, 7) === month) && (!date || key === date) && (!year || key.slice(0, 4) === year);
+}
+function sortByDate(rows) {
+  return rows.sort((a, b) => compareDates(candidateDate(a.candidate || a, a.entry), candidateDate(b.candidate || b, b.entry)));
+}
+function populateYearFilters() {
+  const current = $('#filterYear').value;
+  const dates = candidates.flatMap(candidate => [
+    candidate.interviewDate, candidate.sharedDate, candidate.doj, candidate.offeredDate,
+    candidate.shortlistedDate, candidate.createdAt,
+    ...(candidate.interviews || []).map(item => item.date)
+  ]).concat(cvShares.map(share => share.sharedAt));
+  const years = [...new Set(dates.map(normalizedDateKey).map(key => key.slice(0, 4)).filter(year => /^\d{4}$/.test(year)))].sort((a, b) => b.localeCompare(a));
+  $('#filterYear').innerHTML = `<option value="">All years</option>${years.map(year => `<option value="${year}">${year}</option>`).join('')}`;
+  $('#filterYear').value = years.includes(current) ? current : '';
+}
 function updateMetrics() {
   $('#totalCount').textContent = candidates.length;
   $('#activeCount').textContent = candidates.filter(item => ['Screening', 'Interview', 'Shortlisted', 'Offer'].includes(item.stage)).length;
   $('#interviewCount').textContent = candidates.filter(item => item.stage === 'Interview').length;
-  $('#hiredCount').textContent = candidates.filter(item => item.stage === 'Hired').length;
+  $('#hiredCount').textContent = candidates.filter(item => item.stage === 'Joining').length;
 }
 function render() {
   updateMetrics();
@@ -48,9 +92,10 @@ function render() {
   const stage = $('#stageFilter').value;
   const visible = candidates.filter(item => {
     const matchesText = [item.name, item.role, item.email, item.phone, item.source].some(value => String(value || '').toLowerCase().includes(query));
-    return matchesText && (!stage || item.stage === stage);
-  });
+    return matchesText && (!stage || item.stage === stage) && dateFilterMatch(candidateDate(item));
+  }).sort((a, b) => compareDates(candidateDate(a), candidateDate(b)));
   $('#candidateRows').innerHTML = visible.map(item => `<tr data-id="${escapeHTML(item.id)}">
+    <td><input type="checkbox" data-candidate-select="${escapeHTML(item.id)}" aria-label="Select ${escapeHTML(item.name)}"></td>
     <td><span class="candidate-name">${escapeHTML(item.name)}</span>${item.email ? `<span class="candidate-email">${escapeHTML(item.email)}</span>` : ''}</td>
     <td>${escapeHTML(item.role)}</td>
     <td>${escapeHTML(item.source || '—')}</td>
@@ -68,10 +113,32 @@ async function loadCandidates() {
   showError('');
   try {
     candidates = await api('/candidates');
+    populateYearFilters();
+    const existingIds = new Set(candidates.map(candidate => candidate.id));
+    for (const id of selectedCandidateIds) if (!existingIds.has(id)) selectedCandidateIds.delete(id);
     render();
   } catch (error) {
     showError(error.message);
   }
+}
+function syncSelectionUI() {
+  document.querySelectorAll('[data-candidate-select]').forEach(box => { box.checked = selectedCandidateIds.has(box.dataset.candidateSelect); });
+  document.querySelectorAll('[data-select-all]').forEach(box => {
+    const rows = [...box.closest('table').querySelectorAll('tbody [data-candidate-select]')];
+    const checked = rows.filter(row => selectedCandidateIds.has(row.dataset.candidateSelect)).length;
+    box.checked = rows.length > 0 && checked === rows.length;
+    box.indeterminate = checked > 0 && checked < rows.length;
+  });
+  $('#selectedCandidateCount').textContent = selectedCandidateIds.size;
+  $('#candidateBulkActions').hidden = selectedCandidateIds.size === 0;
+}
+async function deleteCandidate(candidate) {
+  if (!confirm(`Delete ${candidate.name} and all of their interview history? This cannot be undone.`)) return;
+  try {
+    await api(`/candidates/${encodeURIComponent(candidate.id)}`, 'DELETE');
+    selectedCandidateIds.delete(candidate.id);
+    await loadCandidates();
+  } catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
 }
 function openDialog(candidate) {
   const form = $('#candidateForm');
@@ -82,10 +149,10 @@ function openDialog(candidate) {
   $('#saveCandidate').textContent = candidate ? 'Save changes' : 'Save candidate';
   if (candidate) {
       for (const field of ['name', 'role', 'stage', 'email', 'phone', 'source', 'notes', 'company', 'recruiter', 'month', 'interviewDate', 'sharedDate', 'finalCall', 'doj', 'feedback', 'remarks']) {
-      form.elements[field].value = candidate[field] || (field === 'stage' ? 'Applied' : '');
+      form.elements[field].value = candidate[field] || (field === 'stage' ? 'Screening' : '');
     }
   } else {
-    form.elements.stage.value = 'Applied';
+    form.elements.stage.value = 'Screening';
   }
   $('#candidateDialog').showModal();
   form.elements.name.focus();
@@ -115,14 +182,7 @@ $('#candidateRows').addEventListener('click', async event => {
   const candidate = candidates.find(item => item.id === button.closest('tr').dataset.id);
   if (!candidate) return;
   if (button.dataset.action === 'edit') openDialog(candidate);
-  if (button.dataset.action === 'delete' && confirm(`Delete ${candidate.name} from the candidate pipeline?`)) {
-    try {
-      await api(`/candidates/${encodeURIComponent(candidate.id)}`, 'DELETE');
-      await loadCandidates();
-    } catch (error) {
-      showError(error.message);
-    }
-  }
+  if (button.dataset.action === 'delete') deleteCandidate(candidate);
 });
 $('#candidateRows').addEventListener('change', async event => {
   const select = event.target.closest('select[data-action="stage"]');
@@ -137,11 +197,54 @@ $('#candidateRows').addEventListener('change', async event => {
     select.value = candidate.stage;
   }
 });
+document.body.addEventListener('change', event => {
+  const selectAll = event.target.closest('[data-select-all]');
+  if (selectAll) {
+    const ids = [...selectAll.closest('table').querySelectorAll('tbody [data-candidate-select]')].map(box => box.dataset.candidateSelect);
+    ids.forEach(id => selectAll.checked ? selectedCandidateIds.add(id) : selectedCandidateIds.delete(id));
+    syncSelectionUI();
+    return;
+  }
+  const checkbox = event.target.closest('[data-candidate-select]');
+  if (!checkbox) return;
+  if (checkbox.checked) selectedCandidateIds.add(checkbox.dataset.candidateSelect);
+  else selectedCandidateIds.delete(checkbox.dataset.candidateSelect);
+  syncSelectionUI();
+});
+$('#clearCandidateSelection').addEventListener('click', () => { selectedCandidateIds.clear(); syncSelectionUI(); });
+$('#deleteSelectedCandidates').addEventListener('click', async () => {
+  const ids = [...selectedCandidateIds];
+  if (!ids.length || !confirm(`Delete ${ids.length} selected candidate${ids.length === 1 ? '' : 's'} and all linked interview history? This cannot be undone.`)) return;
+  const button = $('#deleteSelectedCandidates'); button.disabled = true; button.textContent = 'Deleting…';
+  try {
+    const result = await api('/candidates', 'DELETE', { ids });
+    selectedCandidateIds.clear();
+    $('#workspaceMessage').textContent = `Deleted ${result.deleted} candidate${result.deleted === 1 ? '' : 's'}.`;
+    $('#workspaceMessage').hidden = false;
+    await loadCandidates();
+  } catch (error) {
+    $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false;
+  } finally { button.disabled = false; button.textContent = 'Delete selected'; syncSelectionUI(); }
+});
 $('#candidateForm').addEventListener('submit', submitCandidate);
 $('#addCandidate').addEventListener('click', () => openDialog());
 $('#emptyAdd').addEventListener('click', () => openDialog());
+$('#addCvShare').addEventListener('click', () => openCvShareDialog());
+$('#cvShareForm').addEventListener('submit', submitCvShare);
+$('#closeCvShareDialog').addEventListener('click', () => $('#cvShareDialog').close());
+$('#cancelCvShareDialog').addEventListener('click', () => $('#cvShareDialog').close());
+$('#cvShareRows').addEventListener('click', async event => {
+  const edit = event.target.closest('[data-edit-cv-share]'), remove = event.target.closest('[data-delete-cv-share]');
+  if (edit) { const share = cvShares.find(item => item.id === edit.dataset.editCvShare); if (share) openCvShareDialog(share); return; }
+  if (!remove) return;
+  const share = cvShares.find(item => item.id === remove.dataset.deleteCvShare); if (!share || !confirm(`Delete the CV share for ${share.candidateName}?`)) return;
+  try { await api(`/ta-cv-shares/${encodeURIComponent(share.id)}`, 'DELETE'); await loadCvShares(); }
+  catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
+});
 $('#search').addEventListener('input', render);
 $('#stageFilter').addEventListener('change', render);
+['filterMonth', 'filterDate', 'filterYear', 'dateSort'].forEach(id => $(`#${id}`).addEventListener('change', () => { render(); renderTrackers(); }));
+$('#clearDateFilters').addEventListener('click', () => { $('#filterMonth').value = ''; $('#filterDate').value = ''; $('#filterYear').value = ''; $('#dateSort').value = 'newest'; render(); renderTrackers(); });
 $('#closeDialog').addEventListener('click', () => $('#candidateDialog').close());
 $('#cancelDialog').addEventListener('click', () => $('#candidateDialog').close());
 $('#logout').addEventListener('click', async () => {
@@ -165,14 +268,39 @@ function renderTrackers() {
   const interviewRows = candidates.flatMap(c => {
     const entries = c.interviews?.length ? c.interviews : [{ date: c.interviewDate, company: c.company, role: c.role, recruiter: c.recruiter, mode: c.interviewMode, time: c.interviewTime, candidateStatus: c.interviewStatus, clientStatus: c.clientStatus, email: c.email, phone: c.phone, contactDetails: c.contactDetails, remarks: c.remarks || c.feedback }];
     return entries.map(entry => ({ candidate: c, entry }));
-  }).filter(({ candidate: c, entry: i }) => candidateMatch({ ...c, company: i.company || c.company, role: i.role || c.role, recruiter: i.recruiter || c.recruiter, stage: i.candidateStatus || c.stage, feedback: i.remarks || c.feedback, remarks: i.clientStatus || c.clientStatus }, interviewQuery));
-  $('#interviewRows').innerHTML = interviewRows.map(({ candidate: c, entry: i }) => `<tr>${td(c.name)}${td(i.recruiter || c.recruiter)}${td(i.date || c.interviewDate)}${td(i.company || c.company)}${td(i.role || c.role)}${td(i.mode || c.interviewMode)}${td(i.time || c.interviewTime)}<td>${stageSelect(c)}<small class="raw-status">${escapeHTML(i.candidateStatus || '')}</small></td>${td(i.clientStatus || c.clientStatus)}${td(i.contactDetails || [i.email || c.email, i.phone || c.phone].filter(Boolean).join(' · '))}${td(i.remarks || c.remarks || c.feedback)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button></td></tr>`).join('');
+  }).filter(({ candidate: c, entry: i }) => dateFilterMatch(candidateDate(c, i)) && candidateMatch({ ...c, company: i.company || c.company, role: i.role || c.role, recruiter: i.recruiter || c.recruiter, stage: i.candidateStatus || c.stage, feedback: i.remarks || c.feedback, remarks: i.clientStatus || c.clientStatus }, interviewQuery));
+  sortByDate(interviewRows);
+  $('#interviewRows').innerHTML = interviewRows.map(({ candidate: c, entry: i }) => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.name)}${td(i.recruiter || c.recruiter)}${td(i.date || c.interviewDate)}${td(i.company || c.company)}${td(i.role || c.role)}${td(i.mode || c.interviewMode)}${td(i.time || c.interviewTime)}<td>${stageSelect(c)}<small class="raw-status">${escapeHTML(i.candidateStatus || '')}</small></td>${td(i.clientStatus || c.clientStatus)}${td(i.contactDetails || [i.email || c.email, i.phone || c.phone].filter(Boolean).join(' · '))}${td(i.remarks || c.remarks || c.feedback)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
   $('#interviewEmpty').hidden = interviewRows.length > 0;
   const offerQuery = trackerSearch('offers');
-  const offerCandidates = candidates.filter(c => ['Shortlisted', 'Offer', 'Hired'].includes(c.stage) && candidateMatch(c, offerQuery));
-  $('#offerRows').innerHTML = offerCandidates.map(c => `<tr>${td(c.recruiter)}${td(c.month || c.doj?.slice(0, 7) || c.createdAt?.slice(0, 7))}${td(c.company)}${td(c.role)}${td(c.name)}<td>${stageSelect(c)}</td>${td(c.finalCall)}${td(c.doj)}${td(c.remarks || c.interviews?.at(-1)?.remarks)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button></td></tr>`).join('');
+  const offerCandidates = candidates.filter(c => ['Shortlisted', 'Offer', 'Joining'].includes(c.stage) && dateFilterMatch(offerDate(c)) && candidateMatch(c, offerQuery));
+  offerCandidates.sort((a, b) => compareDates(offerDate(a), offerDate(b)));
+  $('#offerRows').innerHTML = offerCandidates.map(c => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.recruiter)}${td(c.month || c.doj?.slice(0, 7) || c.createdAt?.slice(0, 7))}${td(c.company)}${td(c.role)}${td(c.name)}<td>${stageSelect(c)}</td>${td(c.finalCall)}${td(c.doj)}${td(c.remarks || c.interviews?.at(-1)?.remarks)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
   $('#offerEmpty').hidden = offerCandidates.length > 0;
+  renderCvShares();
   renderWeekly();
+  syncSelectionUI();
+}
+function renderCvShares() {
+  if (!$('#cvShareRows')) return;
+  const query = trackerSearch('cvshares');
+  const fields = ['recruiter', 'shareStatus', 'company', 'role', 'candidateName', 'designation', 'location', 'workLocation', 'experience', 'currentCompany', 'currentCtc', 'expectedCtc', 'noticePeriod', 'remarks', 'phone', 'email'];
+  const rows = cvShares.filter(share => dateFilterMatch(cvShareDate(share)) && fields.some(field => String(share[field] || '').toLowerCase().includes(query)));
+  rows.sort((a, b) => compareDates(cvShareDate(a), cvShareDate(b)));
+  const dateCounts = new Map();
+  rows.forEach(share => { const date = cvShareDate(share); dateCounts.set(date, (dateCounts.get(date) || 0) + 1); });
+  const cell = value => `<td>${escapeHTML(value || '—')}</td>`;
+  let lastDate = null;
+  $('#cvShareRows').innerHTML = rows.map(share => {
+    const date = cvShareDate(share), band = date !== lastDate ? `<tr class="date-band"><th colspan="18">${escapeHTML(date ? displayDate(`${date}T12:00:00`) : 'Date not set')} <span>${dateCounts.get(date)} CV shares</span></th></tr>` : '';
+    lastDate = date;
+    return `${band}<tr>${cell(share.sharedAt)}${cell(share.recruiter)}${cell(share.shareStatus)}${cell(share.company)}${cell(share.role)}${cell(share.candidateName)}${cell(share.designation)}${cell(share.location)}${cell(share.workLocation)}${cell(share.experience)}${cell(share.currentCompany)}${cell(share.currentCtc)}${cell(share.expectedCtc)}${cell(share.noticePeriod)}${cell(share.remarks)}${cell(share.phone)}${cell(share.email)}<td><button class="action-button" type="button" data-edit-cv-share="${escapeHTML(share.id)}">Edit</button><button class="action-button delete" type="button" data-delete-cv-share="${escapeHTML(share.id)}">Delete</button></td></tr>`;
+  }).join('');
+  $('#cvShareEmpty').hidden = rows.length > 0;
+}
+async function loadCvShares() {
+  try { cvShares = await api('/ta-cv-shares'); populateYearFilters(); renderTrackers(); }
+  catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
 }
 function localDateKey(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
 function mondayFor(date) { const result = new Date(date.getFullYear(), date.getMonth(), date.getDate()); result.setDate(result.getDate() - ((result.getDay() + 6) % 7)); return result; }
@@ -186,7 +314,7 @@ function metricCandidates(recruiter, metric, dateKey) {
     if (c.interviews?.length) return c.interviews.some(i => matchesRecruiter(i.recruiter || c.recruiter) && String(i.sharedDate || '').slice(0, 10) === dateKey);
     return matchesRecruiter(c.recruiter) && String(c.sharedDate || (c.imported ? '' : c.createdAt) || '').slice(0, 10) === dateKey;
   });
-  const stage = metric === TA_METRICS[1] ? 'Shortlisted' : metric === TA_METRICS[2] ? 'Offer' : 'Hired';
+  const stage = metric === TA_METRICS[1] ? 'Shortlisted' : metric === TA_METRICS[2] ? 'Offer' : 'Joining';
   return candidates.filter(c => candidateEvents(c).some(e => matchesRecruiter(e.recruiter || c.recruiter) && e.stage === stage && String(e.at || '').slice(0, 10) === dateKey));
 }
 function renderWeekly() {
@@ -226,194 +354,134 @@ async function saveWeekly() {
 }
 function addCandidate() { openDialog(); }
 function exportExcel() { location.href = `/api/ta-export.xlsx?week=${encodeURIComponent($('#weekStart').value)}`; }
-const IMPORT_FIELDS = [
-  ['recruiter', 'Recruiter name', ['recruiter', 'recruiter name', 'ta name', 'ta', 'hr name', 'consultant', 'sourcing ta']],
-  ['date', 'Interview date', ['interview date', 'interview on', 'date of interview', 'date']],
-  ['company', 'Company', ['company', 'company name', 'client', 'client name', 'organization', 'organisation']],
-  ['role', 'Profile', ['profile', 'job profile', 'candidate profile', 'position', 'role', 'designation', 'requirement', 'job title']],
-  ['name', 'Candidate name', ['candidate', 'candidate name', 'candidate full name', 'applicant name', 'name']],
-  ['mode', 'Interview mode', ['interview mode', 'mode of interview', 'mode', 'round type']],
-  ['time', 'Interview time', ['interview time', 'interview timing', 'time', 'slot']],
-  ['candidateStatus', 'Candidate status', ['candidate status', 'candidate result', 'result', 'status', 'final status']],
-  ['clientStatus', 'Client status', ['client status', 'customer status', 'feedback status']],
-  ['email', 'Email', ['email', 'email id', 'candidate email', 'mail id']],
-  ['phone', 'Phone', ['phone', 'phone number', 'mobile', 'contact number', 'candidate phone']],
-  ['contactDetails', 'Contact details', ['contact details', 'contact info', 'contact']],
-  ['remarks', 'Remarks / feedback', ['remarks', 'remark', 'feedback', 'comments', 'notes']],
-  ['sharedDate', 'Candidate shared date', ['candidate shared date', 'shared date', 'date shared', 'submission date']],
-  ['shortlistedDate', 'Shortlisted date', ['shortlisted date', 'shortlist date', 'selected date']],
-  ['offeredDate', 'Offered date', ['offered date', 'offer date', 'date of offer']],
-  ['finalCall', 'Final call / final status', ['final call', 'final decision', 'selection decision', 'final status']],
-  ['doj', 'DOJ / joined date', ['doj', 'd o j', 'date of joining', 'joining date', 'joined date']],
-  ['month', 'Month', ['month', 'reporting month']]
-];
-let importGrid = [], importHeaderIndex = 0, importMappings = {}, importRows = [], importPreviewPage = 0, importWorkbook = null;
+function openCvShareDialog(share) {
+  const form = $('#cvShareForm'); form.reset(); $('#cvShareFormError').textContent = '';
+  form.elements.id.value = share?.id || '';
+  $('#cvShareDialogTitle').textContent = share ? 'Edit CV share' : 'Add CV share';
+  $('#saveCvShare').textContent = share ? 'Save changes' : 'Save CV share';
+  if (share) for (const field of ['sharedAt', 'recruiter', 'shareStatus', 'company', 'role', 'candidateName', 'designation', 'location', 'workLocation', 'experience', 'currentCompany', 'currentCtc', 'expectedCtc', 'noticePeriod', 'remarks', 'phone', 'email']) form.elements[field].value = share[field] || '';
+  else form.elements.sharedAt.value = localDateKey(new Date());
+  $('#cvShareDialog').showModal();
+  form.elements.candidateName.focus();
+}
+async function submitCvShare(event) {
+  event.preventDefault();
+  const form = $('#cvShareForm'), values = Object.fromEntries(new FormData(form).entries()), id = values.id;
+  delete values.id;
+  const button = $('#saveCvShare'); button.disabled = true;
+  try {
+    await api(id ? `/ta-cv-shares/${encodeURIComponent(id)}` : '/ta-cv-shares', id ? 'PUT' : 'POST', values);
+    $('#cvShareDialog').close(); await loadCvShares();
+    $('#workspaceMessage').textContent = id ? 'CV share updated.' : 'CV share saved.'; $('#workspaceMessage').hidden = false;
+  } catch (error) { $('#cvShareFormError').textContent = error.message; }
+  finally { button.disabled = false; }
+}
+let importWorkbook = null, importFile = null, importFileBase64 = '', importSheets = [], activeImportSheet = '';
 const normalizeHeader = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-function bestHeaderIndex(grid) {
-  let best = 0, bestScore = -1;
-  grid.slice(0, 20).forEach((row, index) => {
-    const headers = row.map(normalizeHeader);
-    const score = IMPORT_FIELDS.reduce((total, [, , aliases]) => total + (headers.some(header => aliases.some(alias => header === alias || (alias.length >= 12 && header.startsWith(alias)))) ? 1 : 0), 0);
-    if (score > bestScore) { best = index; bestScore = score; }
+function worksheetType(name) {
+  const value = normalizeHeader(name);
+  if (value.includes('cv') && value.includes('shared')) return 'CV sharing';
+  if (value.includes('interview')) return 'Interview tracker';
+  if (value.includes('shortlist') || value.includes('offer')) return 'Shortlisted / offered';
+  if (value.includes('weekly')) return 'Weekly summary';
+  if (value.includes('fint') || value.includes('sol')) return 'Candidate sourcing';
+  return 'Historical worksheet';
+}
+function worksheetHeader(grid, kind) {
+  const aliases = kind === 'Shortlisted / offered'
+    ? [['ta name', 'recruiter'], ['candidate']]
+    : kind === 'Candidate sourcing' ? [['candidate name', 'candidate'], ['skill', 'profile']] : [];
+  let best = -1, score = 0;
+  grid.slice(0, 30).forEach((row, index) => {
+    const values = row.map(normalizeHeader), found = aliases.reduce((n, group) => n + Number(values.some(value => group.includes(value))), 0);
+    if (found > score) { best = index; score = found; }
   });
   return best;
 }
-function headerScore(grid) { const row = grid[bestHeaderIndex(grid)] || [], headers = row.map(normalizeHeader); return IMPORT_FIELDS.reduce((total, [, , aliases]) => total + (headers.some(header => aliases.includes(header)) ? 1 : 0), 0); }
-function parseTrackerDate(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return localDateKey(value);
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 100000 && window.XLSX?.SSF) {
-    const parsed = XLSX.SSF.parse_date_code(value);
-    if (parsed?.y && parsed?.m && parsed?.d) return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
-  }
-  const text = String(value ?? '').trim();
-  if (!text) return '';
-  let match = text.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})$/);
-  if (match) {
-    let [, first, second, year] = match; first = Number(first); second = Number(second); year = Number(year); if (year < 100) year += year < 50 ? 2000 : 1900;
-    const day = first > 12 ? first : second > 12 ? second : first;
-    const month = first > 12 ? second : second > 12 ? first : second;
-    if (day <= 31 && month <= 12) return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  }
-  match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (match) return `${match[1]}-${String(Number(match[2])).padStart(2, '0')}-${String(Number(match[3])).padStart(2, '0')}`;
-  const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? text : localDateKey(parsed);
-}
-function importCellText(value, field) {
-  if (value === null || value === undefined) return '';
-  if (['date', 'sharedDate', 'shortlistedDate', 'offeredDate', 'doj'].includes(field)) return parseTrackerDate(value);
-  if (field === 'month') {
-    if (value instanceof Date || (typeof value === 'number' && window.XLSX?.SSF?.parse_date_code(value)?.y)) return parseTrackerDate(value).slice(0, 7);
-    const text = String(value).trim(), numericMonth = text.match(/^(\d{4})[-/.](\d{1,2})$/);
-    if (numericMonth && Number(numericMonth[2]) >= 1 && Number(numericMonth[2]) <= 12) return `${numericMonth[1]}-${String(Number(numericMonth[2])).padStart(2, '0')}`;
-    const parsed = new Date(text); return !Number.isNaN(parsed.getTime()) && /[a-z]/i.test(text) ? localDateKey(parsed).slice(0, 7) : text;
-  }
-  if (field === 'time' && typeof value === 'number' && value >= 0 && value < 1 && window.XLSX?.SSF) return XLSX.SSF.format('h:mm AM/PM', value);
-  if (value instanceof Date && field === 'time') return value.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return String(value).trim();
-}
-function autoMappings(header) {
-  const normalized = header.map(normalizeHeader), mappings = {};
-  for (const [field, , aliases] of IMPORT_FIELDS) {
-    const index = normalized.findIndex(text => aliases.some(alias => text === alias || (alias.length >= 12 && text.startsWith(alias))));
-    mappings[field] = index < 0 ? '' : String(index);
-  }
-  return mappings;
-}
-function renderImportMappings() {
-  const header = importGrid[importHeaderIndex] || [];
-  $('#importMappingFields').innerHTML = IMPORT_FIELDS.map(([field, label]) => `<label>${escapeHTML(label)}<select data-import-map="${field}"><option value="">Do not import</option>${header.map((cell, index) => `<option value="${index}" ${importMappings[field] === String(index) ? 'selected' : ''}>${escapeHTML(String(cell || `Column ${index + 1}`))}</option>`).join('')}</select></label>`).join('');
-}
-function candidateForImport(row) {
-  const normal = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
-  if (row.email) return candidates.find(c => normal(c.email) === normal(row.email));
-  if (row.phone) { const digits = value => String(value || '').replace(/\D/g, '').slice(-10); return candidates.find(c => digits(c.phone) && digits(c.phone) === digits(row.phone)); }
-  return candidates.find(c => normal(c.name) === normal(row.name) && normal(c.role) === normal(row.role));
-}
-function importInterviewKey(row) { const normalize = key => String(row[key] || '').trim().toLowerCase().replace(/\s+/g, ' '); const identity = ['date', 'company', 'role', 'recruiter', 'mode', 'time'].map(normalize); return (identity.some(Boolean) ? identity : ['candidateStatus', 'clientStatus', 'email', 'phone', 'contactDetails', 'remarks'].map(normalize)).join('|'); }
-function isDuplicateImport(row, seen) {
-  const candidate = candidateForImport(row);
-  if (candidate) {
-    const entries = candidate.interviews?.length ? candidate.interviews : candidate.interviewDate || candidate.company || candidate.role || candidate.interviewStatus || candidate.feedback ? [{ date: candidate.interviewDate, company: candidate.company, role: candidate.role, recruiter: candidate.recruiter, mode: candidate.interviewMode, time: candidate.interviewTime, candidateStatus: candidate.interviewStatus, clientStatus: candidate.clientStatus, email: candidate.email, phone: candidate.phone, contactDetails: candidate.contactDetails, remarks: candidate.remarks || candidate.feedback }] : [];
-    if (entries.some(item => importInterviewKey({ date: item.date, company: item.company, role: item.role, recruiter: item.recruiter, mode: item.mode, time: item.time, candidateStatus: item.candidateStatus, clientStatus: item.clientStatus, email: item.email, phone: item.phone, contactDetails: item.contactDetails, remarks: item.remarks }) === importInterviewKey(row))) return true;
-  }
-  const identity = [row.email || row.phone || row.name, row.email || row.phone ? '' : row.role].map(value => String(value || '').toLowerCase()).join('|');
-  const key = `${identity}|${importInterviewKey(row)}`;
-  if (seen.has(key)) return true;
-  seen.add(key);
-  return false;
-}
-function mapImportRows() {
-  const seen = new Set();
-  importRows = importGrid.slice(importHeaderIndex + 1).map(source => {
-    const row = {};
-    for (const [field] of IMPORT_FIELDS) {
-      const index = importMappings[field];
-      row[field] = index === '' || index === undefined ? '' : importCellText(source[Number(index)], field);
+function sheetGrid(sheet) {
+  const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '', blankrows: true });
+  for (const merge of sheet['!merges'] || []) {
+    const value = grid[merge.s.r]?.[merge.s.c];
+    if (value === undefined || value === '') continue;
+    for (let r = merge.s.r; r <= Math.min(merge.e.r, merge.s.r + 30); r++) {
+      grid[r] ||= [];
+      for (let c = merge.s.c; c <= Math.min(merge.e.c, merge.s.c + 30); c++) if (grid[r][c] === '' || grid[r][c] === undefined) grid[r][c] = value;
     }
-    row.stage = candidateStageForImport(row.candidateStatus);
-    row._duplicate = Boolean(row.name && isDuplicateImport(row, seen));
-    return row;
-  }).filter(row => IMPORT_FIELDS.some(([field]) => String(row[field] || '').trim()));
-  renderImportPreview();
+  }
+  return grid;
 }
-function renderImportPreview() {
-  const visibleFields = IMPORT_FIELDS.filter(([field]) => importMappings[field] !== '');
-  const duplicateCount = importRows.filter(row => row._duplicate).length;
-  const rowError = row => !row.name.trim() ? 'Missing candidate name' : row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email) ? 'Invalid email' : '';
-  const invalidCount = importRows.filter(row => rowError(row)).length;
-  const pageSize = 50, pageCount = Math.max(1, Math.ceil(importRows.length / pageSize));
-  importPreviewPage = Math.min(importPreviewPage, pageCount - 1);
-  $('#importSummary').textContent = `${importRows.length} rows · ${duplicateCount} duplicate interview rows will not be added; missing details can be merged · ${invalidCount} missing candidate name${invalidCount === 1 ? '' : 's'} will be skipped`;
-  $('#importPreviewHead').innerHTML = `<tr><th>Row</th>${visibleFields.map(([, label]) => `<th>${escapeHTML(label)}</th>`).join('')}<th>Import result</th></tr>`;
-  const start = importPreviewPage * pageSize;
-  $('#importPreviewRows').innerHTML = importRows.slice(start, start + pageSize).map((row, offset) => { const rowIndex = start + offset; return `<tr class="${row._duplicate ? 'is-duplicate' : ''}"><td>${rowIndex + 1}</td>${visibleFields.map(([field]) => `<td><input data-import-row="${rowIndex}" data-import-value="${field}" value="${escapeHTML(row[field] || '')}" aria-label="Row ${rowIndex + 1} ${escapeHTML(field)}"></td>`).join('')}<td class="duplicate-cell">${row._duplicate ? 'Duplicate · merge missing details' : rowError(row) || 'Ready'}</td></tr>`; }).join('');
-  $('#importPageLabel').textContent = `${importRows.length ? start + 1 : 0}–${Math.min(start + pageSize, importRows.length)} of ${importRows.length}`;
-  $('#importPrevPage').disabled = importPreviewPage === 0; $('#importNextPage').disabled = importPreviewPage >= pageCount - 1;
-  $('#confirmImport').disabled = !importRows.some(row => !rowError(row));
+function renderImportSheetList() {
+  $('#importSheetChoices').innerHTML = importSheets.map(sheet => `<label class="import-sheet-choice"><input type="checkbox" data-import-worksheet="${escapeHTML(sheet.name)}" ${sheet.selected ? 'checked' : ''}><span>${escapeHTML(sheet.name)}${sheet.hidden ? ' ? hidden' : ''}</span><small>${escapeHTML(sheet.kind)} ? ${sheet.populatedRows} rows</small></label>`).join('');
+  $('#importSheet').innerHTML = importSheets.map(sheet => `<option value="${escapeHTML(sheet.name)}" ${sheet.name === activeImportSheet ? 'selected' : ''}>${escapeHTML(sheet.name)}${sheet.hidden ? ' (hidden)' : ''}</option>`).join('');
+  $('#confirmImport').disabled = !importSheets.some(sheet => sheet.selected);
+  $('#confirmImportOne').disabled = !activeImportSheet;
+  renderImportSheetPreview();
+}
+function renderImportSheetPreview() {
+  const sheet = importSheets.find(item => item.name === activeImportSheet);
+  if (!sheet) return;
+  const nonempty = sheet.grid.map((row, index) => ({ row, index })).filter(item => item.row.some(value => String(value ?? '').trim()));
+  const headerIndex = sheet.headerIndex;
+  let mapping = 'Detected layout: ' + sheet.kind;
+  if (sheet.kind === 'CV sharing') mapping += ' · date bands plus recruiter, share status/time, company, profile, candidate, designation, locations, experience, current company, CTC, notice period, remarks, phone and email';
+  else if (sheet.kind === 'Interview tracker') mapping += ' · A recruiter, B company, C profile, D candidate, E interview type, F time, G/H remarks or feedback, I/J contact details';
+  else if (sheet.kind === 'Shortlisted / offered') mapping += ` ? header row ${headerIndex + 1}; TA name, month, company, profile, candidate, status, final call, joining date and remarks mapped by heading`;
+  else if (sheet.kind === 'Candidate sourcing') mapping += ` ? header row ${headerIndex + 1}; date, skill, candidate name, mobile, email and status/feedback mapped by heading`;
+  else if (sheet.kind === 'Weekly summary') mapping += ' ? original cells, merged ranges, row order and blank rows retained';
+  $('#importSheetDetails').textContent = `${mapping}. ${sheet.merges} merged ranges preserved.`;
+  const cols = Math.max(1, Math.min(14, ...[14, ...nonempty.slice(0, 8).map(item => item.row.length)]));
+  const display = nonempty.slice(0, 18);
+  $('#importPreviewHead').innerHTML = `<tr><th>Excel row</th>${Array.from({ length: cols }, (_, i) => `<th>${String.fromCharCode(65 + (i % 26))}${i >= 26 ? '?' : ''}</th>`).join('')}</tr>`;
+  $('#importPreviewRows').innerHTML = display.map(({ row, index }) => `<tr><td>${index + 1}</td>${Array.from({ length: cols }, (_, i) => `<td>${escapeHTML(row[i] ?? '')}</td>`).join('')}</tr>`).join('');
 }
 async function loadImportFile(file) {
   $('#importError').textContent = '';
-  $('#importMapping').hidden = true; $('#importPreviewSection').hidden = true;
-  if (!window.XLSX) throw new Error('The local Excel reader did not load. Refresh the page and try again.');
+  if (!window.XLSX) throw new Error('The Excel reader did not load. Refresh the page and try again.');
+  if (file.size > 20 * 1024 * 1024) throw new Error('Excel workbooks are limited to 20 MB.');
   const bytes = await file.arrayBuffer();
-  importWorkbook = XLSX.read(bytes, { type: 'array', cellDates: true });
-  if (!importWorkbook.SheetNames.length) throw new Error('The file has no worksheets.');
-  const grids = importWorkbook.SheetNames.map(name => XLSX.utils.sheet_to_json(importWorkbook.Sheets[name], { header: 1, raw: true, defval: '', blankrows: true }));
-  const selectedIndex = grids.map(headerScore).reduce((best, score, index, scores) => score > scores[best] ? index : best, 0);
-  $('#importSheet').innerHTML = importWorkbook.SheetNames.map((name, index) => `<option value="${escapeHTML(name)}" ${index === selectedIndex ? 'selected' : ''}>${escapeHTML(name)}</option>`).join('');
-  $('#importSheetWrap').hidden = importWorkbook.SheetNames.length < 2;
-  await loadImportSheet(importWorkbook.SheetNames[selectedIndex]);
+  importWorkbook = XLSX.read(bytes, { type: 'array', cellDates: true, bookSheets: false });
+  if (!importWorkbook.SheetNames.length) throw new Error('This workbook has no worksheets.');
+  importFile = file;
+  const reader = new FileReader();
+  importFileBase64 = await new Promise((resolve, reject) => { reader.onload = () => resolve(String(reader.result).split(',')[1] || ''); reader.onerror = () => reject(new Error('Could not read the selected workbook.')); reader.readAsDataURL(file); });
+  importSheets = importWorkbook.SheetNames.map(name => {
+    const sheet = importWorkbook.Sheets[name], grid = sheetGrid(sheet), kind = worksheetType(name), hidden = Boolean(importWorkbook.Workbook?.Sheets?.find(item => item.name === name)?.Hidden);
+    const headerIndex = worksheetHeader(grid, kind);
+    return { name, grid, kind, hidden, headerIndex: headerIndex < 0 ? 0 : headerIndex, merges: sheet['!merges']?.length || 0, populatedRows: grid.filter(row => row.some(value => String(value ?? '').trim())).length, selected: true };
+  });
+  activeImportSheet = importSheets[0]?.name || '';
+  $('#importWorkbookSummary').textContent = `${importSheets.length} worksheets detected, including hidden sheets. Select any combination to import.`;
+  $('#importWorksheets').hidden = false;
+  renderImportSheetList();
 }
-async function loadImportSheet(sheetName) {
-  const sheet = importWorkbook?.Sheets[sheetName];
-  if (!sheet) throw new Error('The selected worksheet could not be read.');
-  prepareImportGrid(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '', blankrows: true }));
-}
-function loadPastedTracker(text) {
-  if (!window.XLSX) throw new Error('The local Excel reader did not load. Refresh the page and try again.');
-  $('#importMapping').hidden = true; $('#importPreviewSection').hidden = true;
-  const options = { type: 'string', cellDates: true };
-  if (text.includes('\t')) options.FS = '\t';
-  const workbook = XLSX.read(text, options);
-  if (!workbook.SheetNames.length) throw new Error('No tabular rows were found in the pasted text.');
-  importWorkbook = null;
-  $('#importSheetWrap').hidden = true;
-  prepareImportGrid(XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1, raw: true, defval: '', blankrows: true }));
-}
-function prepareImportGrid(grid) {
-  importGrid = grid;
-  if (!importGrid.some(row => row.some(cell => String(cell ?? '').trim()))) throw new Error('The selected sheet is empty.');
-  if (importGrid.length > 5001) throw new Error('This import supports up to 5000 data rows at a time.');
-  importHeaderIndex = bestHeaderIndex(importGrid);
-  importPreviewPage = 0;
-  $('#importHeaderRow').innerHTML = importGrid.slice(0, 20).map((row, index) => `<option value="${index}" ${index === importHeaderIndex ? 'selected' : ''}>Row ${index + 1}: ${escapeHTML(row.slice(0, 5).map(String).join(' · '))}</option>`).join('');
-  importMappings = autoMappings(importGrid[importHeaderIndex] || []);
-  $('#importMapping').hidden = false; $('#importPreviewSection').hidden = false;
-  renderImportMappings(); mapImportRows();
-}
-function candidateStageForImport(value) {
-  const status = String(value || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim();
-  return /reject|declined|not selected|not offered|not shortlisted|not joined/.test(status) ? 'Rejected' : /join|hired/.test(status) ? 'Hired' : /offer|offered/.test(status) ? 'Offer' : /short.?list|selected/.test(status) ? 'Shortlisted' : /interview/.test(status) ? 'Interview' : /screen/.test(status) ? 'Screening' : /applied|shared|submitted/.test(status) ? 'Applied' : 'Unspecified';
-}
-function recalculateImportDuplicates() { const seen = new Set(); importRows.forEach(row => { row.stage = candidateStageForImport(row.candidateStatus); row._duplicate = Boolean(row.name && isDuplicateImport(row, seen)); }); }
-async function submitImport() {
-  const button = $('#confirmImport'); button.disabled = true; button.textContent = 'Importing…'; $('#importError').textContent = '';
+async function submitHistoricalImport(names, individual = false) {
+  const button = individual ? $('#confirmImportOne') : $('#confirmImport');
+  button.disabled = true; button.textContent = 'Importing?'; $('#importError').textContent = '';
   try {
-    recalculateImportDuplicates();
-    const rows = importRows.filter(row => row.name.trim() && (!row.email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email))).map(row => ({
-      name: row.name, role: row.role, company: row.company, recruiter: row.recruiter, email: row.email, phone: row.phone, month: row.month,
-      stage: row.stage,
-      interview: { date: row.date, company: row.company, role: row.role, recruiter: row.recruiter, mode: row.mode, time: row.time, candidateStatus: row.candidateStatus, clientStatus: row.clientStatus, email: row.email, phone: row.phone, contactDetails: row.contactDetails, remarks: row.remarks, sharedDate: row.sharedDate, shortlistedDate: row.shortlistedDate, offeredDate: row.offeredDate, finalCall: row.finalCall, doj: row.doj }
-    }));
-    const result = await api('/candidates/import', 'POST', { rows });
+    const result = await api('/ta-imports', 'POST', { workbookBase64: importFileBase64, sourceName: importFile?.name || 'Historical workbook', sheets: names });
+    const details = result.worksheets.map(sheet => `${sheet.name}: ${sheet.status === 'imported' ? `${sheet.recordsImported} records, ${sheet.candidatesCreated} new candidates, ${sheet.interviewsAdded} interviews` : sheet.status}`).join('\n');
     $('#trackerImportDialog').close();
-    const message = `Imported ${result.interviewsAdded} interview record${result.interviewsAdded === 1 ? '' : 's'} and ${result.candidatesCreated} new candidate${result.candidatesCreated === 1 ? '' : 's'}. Skipped ${result.duplicatesSkipped} duplicate${result.duplicatesSkipped === 1 ? '' : 's'} (${result.duplicateDetailsMerged} enriched with missing details) and ${result.invalidSkipped} invalid row${result.invalidSkipped === 1 ? '' : 's'}.`;
-    showError(''); await loadCandidates();
-    $('#importNotice').textContent = message; $('#importNotice').hidden = false;
+    await loadCandidates(); await loadImportReports();
+    $('#workspaceMessage').textContent = `Historical import report\n${details}\nTotal: ${result.candidatesCreated} candidates, ${result.interviewsAdded} interview rounds and ${result.cvSharesAdded || 0} CV shares imported; ${result.duplicatesSkipped} exact duplicates skipped. Original worksheet data was archived.`;
+    $('#workspaceMessage').hidden = false;
   } catch (error) { $('#importError').textContent = error.message; }
-  finally { button.textContent = 'Import records'; button.disabled = !importRows.some(row => row.name.trim() && (!row.email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email))); }
+  finally { button.textContent = individual ? 'Import this worksheet' : 'Import selected worksheets'; button.disabled = individual ? !activeImportSheet : !importSheets.some(sheet => sheet.selected); }
 }
+let importReports = [];
+async function loadImportReports() {
+  try {
+    importReports = await api('/ta-imports');
+    $('#historicalImportReports').innerHTML = importReports.map(item => `<article class="historical-import-report"><strong>${escapeHTML(item.sourceName)}</strong><small>${escapeHTML(new Date(item.importedAt).toLocaleString())}</small><span>${(item.report?.worksheets || []).map(sheet => `${escapeHTML(sheet.name)} (${sheet.populatedRows} rows)`).join(' · ')}</span><small>${item.report?.candidatesCreated || 0} candidates · ${item.report?.interviewsAdded || 0} interview rounds · ${item.report?.cvSharesAdded || 0} CV shares · original row/merge structure archived</small><a href="/api/ta-imports/${encodeURIComponent(item.id)}.xlsx">Download archived worksheets</a></article>`).join('') || '<p class="empty-state compact">No historical imports yet.</p>';
+  } catch { /* Reports are optional until an import has been saved. */ }
+}
+$('#importTracker').addEventListener('click', () => { $('#trackerImportForm').reset(); $('#trackerImportFile').value = ''; $('#importError').textContent = ''; $('#importWorksheets').hidden = true; importWorkbook = null; importFile = null; importFileBase64 = ''; importSheets = []; activeImportSheet = ''; $('#confirmImport').disabled = true; $('#confirmImportOne').disabled = true; $('#trackerImportDialog').showModal(); });
+$('#trackerImportFile').addEventListener('change', async event => { const file = event.target.files?.[0]; if (!file) return; try { await loadImportFile(file); } catch (error) { $('#importError').textContent = error.message; } });
+$('#importSheet').addEventListener('change', () => { activeImportSheet = $('#importSheet').value; renderImportSheetPreview(); $('#confirmImportOne').disabled = !activeImportSheet; });
+$('#importSheetChoices').addEventListener('change', event => { const input = event.target.closest('[data-import-worksheet]'); if (!input) return; const sheet = importSheets.find(item => item.name === input.dataset.importWorksheet); if (sheet) sheet.selected = input.checked; $('#confirmImport').disabled = !importSheets.some(item => item.selected); });
+$('#confirmImportOne').addEventListener('click', () => submitHistoricalImport([activeImportSheet], true));
+$('#confirmImport').addEventListener('click', () => submitHistoricalImport(importSheets.filter(sheet => sheet.selected).map(sheet => sheet.name)));
+$('#trackerImportDialog').addEventListener('close', () => { const result = $('#workspaceMessage'); if (result.textContent.startsWith('Historical import report')) result.hidden = false; });
+loadImportReports();
 document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => {
   const selected = button.dataset.tab;
   document.querySelectorAll('[data-tab]').forEach(tab => tab.setAttribute('aria-selected', String(tab === button)));
@@ -429,24 +497,18 @@ document.querySelectorAll('#interviewRows, #offerRows').forEach(body => body.add
   catch (error) { showError(error.message); select.value = candidate.stage; }
 }));
 document.querySelectorAll('#interviewRows, #offerRows').forEach(body => body.addEventListener('click', event => {
-  const button = event.target.closest('[data-edit-candidate]'); if (button) { const c = candidates.find(item => item.id === button.dataset.editCandidate); if (c) openDialog(c); }
+  const button = event.target.closest('[data-edit-candidate], [data-delete-candidate]'); if (!button) return;
+  const c = candidates.find(item => item.id === (button.dataset.editCandidate || button.dataset.deleteCandidate));
+  if (!c) return;
+  if (button.hasAttribute('data-edit-candidate')) openDialog(c); else deleteCandidate(c);
 }));
 $('#weekStart').value = localDateKey(mondayFor(new Date()));
 $('#weekStart').addEventListener('change', () => { const date = new Date(`${$('#weekStart').value}T00:00:00`); if (!Number.isNaN(date.getTime())) { $('#weekStart').value = localDateKey(mondayFor(date)); loadWeekly(); } });
 $('#addRecruiter').addEventListener('click', () => { const name = prompt('Recruiter / TA name'); if (!name?.trim()) return; const key = name.trim().toLowerCase(); if (!weeklyReports.some(r => r.recruiter.toLowerCase() === key) && !candidates.some(c => c.recruiter?.toLowerCase() === key)) weeklyReports.push({ id: `draft-${Date.now()}`, weekStart: $('#weekStart').value, recruiter: name.trim(), manual: {} }); renderWeekly(); });
 $('#saveWeekly').addEventListener('click', saveWeekly);
-$('#importTracker').addEventListener('click', () => { $('#trackerImportForm').reset(); $('#trackerImportFile').value = ''; $('#importError').textContent = ''; $('#importMapping').hidden = true; $('#importPreviewSection').hidden = true; $('#importSheetWrap').hidden = true; importWorkbook = null; $('#trackerImportDialog').showModal(); });
-$('#trackerImportFile').addEventListener('change', async event => { const file = event.target.files?.[0]; if (!file) return; try { await loadImportFile(file); } catch (error) { $('#importError').textContent = error.message; } });
-$('#parsePastedTracker').addEventListener('click', () => { try { const text = $('#trackerPasteData').value.trim(); if (!text) throw new Error('Paste the header row and at least one tracker row first.'); loadPastedTracker(text); $('#importError').textContent = ''; } catch (error) { $('#importError').textContent = error.message; } });
-$('#importSheet').addEventListener('change', async () => { try { await loadImportSheet($('#importSheet').value); } catch (error) { $('#importError').textContent = error.message; } });
-$('#importHeaderRow').addEventListener('change', () => { importHeaderIndex = Number($('#importHeaderRow').value); importMappings = autoMappings(importGrid[importHeaderIndex] || []); renderImportMappings(); mapImportRows(); });
-$('#importMappingFields').addEventListener('change', event => { const select = event.target.closest('[data-import-map]'); if (!select) return; importMappings[select.dataset.importMap] = select.value; mapImportRows(); });
-$('#importPreviewRows').addEventListener('change', event => { const input = event.target.closest('[data-import-row]'); if (!input) return; const rowIndex = Number(input.dataset.importRow); importRows[rowIndex][input.dataset.importValue] = input.value; recalculateImportDuplicates(); renderImportPreview(); });
-$('#importPrevPage').addEventListener('click', () => { importPreviewPage = Math.max(0, importPreviewPage - 1); renderImportPreview(); });
-$('#importNextPage').addEventListener('click', () => { importPreviewPage++; renderImportPreview(); });
-$('#confirmImport').addEventListener('click', submitImport);
 document.querySelectorAll('[data-close-import]').forEach(button => button.addEventListener('click', () => $('#trackerImportDialog').close()));
 $('#weeklyRows').addEventListener('click', async event => { const button = event.target.closest('[data-remove-recruiter]'); if (!button) return; const name = button.dataset.removeRecruiter; if (candidates.some(c => c.recruiter?.toLowerCase() === name.toLowerCase())) return alert('This recruiter is assigned to candidate records. Change those candidate profiles first.'); const record = weeklyReports.find(r => r.recruiter.toLowerCase() === name.toLowerCase()); try { if (record && !String(record.id).startsWith('draft-')) await api(`/ta-weekly/${encodeURIComponent(record.id)}`, 'DELETE'); weeklyReports = weeklyReports.filter(r => r.recruiter.toLowerCase() !== name.toLowerCase()); renderWeekly(); } catch (error) { $('#weeklyMessage').textContent = error.message; $('#weeklyMessage').hidden = false; } });
 populateStageOptions();
 loadCandidates();
 loadWeekly();
+loadCvShares();
