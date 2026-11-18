@@ -36,7 +36,7 @@
   <section class="candidate-date-filters" aria-label="Filter and sort candidate records">
     <strong>Filter by date</strong>
     <label>Month<select id="filterMonth"><option value="">All months</option><option value="01">January</option><option value="02">February</option><option value="03">March</option><option value="04">April</option><option value="05">May</option><option value="06">June</option><option value="07">July</option><option value="08">August</option><option value="09">September</option><option value="10">October</option><option value="11">November</option><option value="12">December</option></select></label>
-    <label>Date<input id="filterDate" type="date"></label>
+    <label>Date<input id="filterDate" type="date" aria-label="Filter by exact date; blank shows all dates"></label>
     <label>Year<select id="filterYear"><option value="">All years</option></select></label>
     <label>Sort by date<select id="dateSort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
     <button id="clearDateFilters" class="secondary-button" type="button">Clear filters</button>
@@ -71,8 +71,10 @@
   </section>
   <section class="tracker-view" id="cvsharesView" hidden>
     <section class="candidate-panel">
-      <div class="panel-heading"><div><h2>CV Shared Tracker</h2><p>Review CV shares by date, recruiter, client, profile, and share status.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="cvshares" placeholder="Search CV shares" aria-label="Search CV shared records"></label><button id="addCvShare" class="primary-button" type="button">+ Add CV share</button></div></div>
-      <div class="table-wrap"><table class="cv-share-table"><thead><tr><th>Date</th><th>Recruiter</th><th>Share status / time</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Designation</th><th>Location</th><th>Work location</th><th>Experience</th><th>Current company</th><th>Current CTC</th><th>Expected CTC</th><th>Notice period</th><th>Remarks</th><th>Phone</th><th>Email</th><th></th></tr></thead><tbody id="cvShareRows"></tbody></table><div id="cvShareEmpty" class="empty-state compact" hidden><strong>No CV shares match these filters</strong><p>Import a CV sharing worksheet or add a CV share record.</p></div></div>
+      <div class="panel-heading"><div><h2>CV Shared Tracker</h2><p>Review CV shares by date, recruiter, client, profile, and share status.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="cvshares" placeholder="Search CV shares" aria-label="Search CV shared records"></label><button id="pasteCvShares" class="secondary-button" type="button">Paste rows</button><button id="addCvShare" class="primary-button" type="button">+ Add CV share</button></div></div>
+      <div id="cvShareBulkActions" class="bulk-actions" hidden><span><strong id="selectedCvShareCount">0</strong> CV shares selected</span><button id="clearCvShareSelection" class="secondary-button" type="button">Clear selection</button><button id="deleteSelectedCvShares" class="danger-button" type="button">Delete selected</button></div>
+      <div class="table-wrap"><table class="cv-share-table"><thead><tr><th><input id="selectAllCvShares" type="checkbox" aria-label="Select all visible CV shares"></th><th>Date</th><th>Recruiter</th><th>Share status / time</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Designation</th><th>Location</th><th>Work location</th><th>Experience</th><th>Current company</th><th>Current CTC</th><th>Expected CTC</th><th>Notice period</th><th>Remarks</th><th>Phone</th><th>Email</th><th></th></tr></thead><tbody id="cvShareRows"></tbody></table><div id="cvShareEmpty" class="empty-state compact" hidden><strong>No CV shares match these filters</strong><p>Import a CV sharing worksheet or add a CV share record.</p></div></div>
+      <div id="cvSharePagination" class="preview-pagination" hidden><span id="cvSharePageSummary"></span><button id="cvSharePrevPage" class="secondary-button" type="button">Previous</button><button id="cvShareNextPage" class="secondary-button" type="button">Next</button></div>
     </section>
   </section>
   <section class="tracker-view" id="pipelineView" hidden>
@@ -143,10 +145,24 @@
     <div class="dialog-actions"><button id="cancelCvShareDialog" class="secondary-button" type="button">Cancel</button><button id="saveCvShare" class="primary-button" type="submit">Save CV share</button></div>
   </form>
 </dialog>
+<dialog id="pasteCvSharesDialog" aria-labelledby="pasteCvSharesTitle">
+  <form id="pasteCvSharesForm" method="dialog">
+    <div class="dialog-heading"><div><span class="eyebrow">BULK IMPORT</span><h2 id="pasteCvSharesTitle">Paste CV share rows</h2><p>Copy rows from Excel and paste below. Use the CV Shared worksheet column order; date bands are supported. Include the header row if available.</p></div><button id="closePasteCvShares" class="close-button" type="button" aria-label="Close dialog">&times;</button></div>
+    <textarea id="pasteCvSharesText" rows="12" aria-label="Paste CV share rows" placeholder="Date | Recruiter | Share status/time | Company | Profile | Candidate | Designation | Location | Work location | Experience | Current company | Current CTC | Expected CTC | Notice period | Remarks | Phone | Email" style="width:100%;resize:vertical;padding:10px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--ink);font:11px/1.5 ui-monospace,Consolas,monospace"></textarea>
+    <div id="pasteCvSharesError" class="form-error" role="alert"></div>
+    <div class="dialog-actions"><button id="cancelPasteCvShares" class="secondary-button" type="button">Cancel</button><button id="submitPasteCvShares" class="primary-button" type="submit">Import pasted rows</button></div>
+  </form>
+</dialog>
 <dialog id="trackerImportDialog" class="import-dialog" aria-labelledby="importDialogTitle">
   <form id="trackerImportForm" method="dialog">
-    <div class="dialog-heading"><div><span class="eyebrow">HISTORICAL DATA</span><h2 id="importDialogTitle">Import Historical Workbook</h2><p>Upload the workbook once. Every visible and hidden worksheet is detected, previewed, and kept in its original row and merge structure.</p></div><button class="close-button" type="button" data-close-import aria-label="Close dialog">×</button></div>
-    <label class="import-file">Excel workbook<input id="trackerImportFile" type="file" accept=".xlsx,.xls" required></label>
+    <div class="dialog-heading"><div><span class="eyebrow">HISTORICAL DATA</span><h2 id="importDialogTitle">Import Historical Workbook</h2><p>Upload an Excel workbook or copy cells from Excel and paste them below. Review the detected worksheet before importing.</p></div><button class="close-button" type="button" data-close-import aria-label="Close dialog">×</button></div>
+    <label class="import-file">Excel workbook<input id="trackerImportFile" type="file" accept=".xlsx,.xls"></label>
+    <section class="paste-import">
+      <label for="trackerPasteText">Or paste copied Excel cells</label>
+      <textarea id="trackerPasteText" rows="5" placeholder="Copy cells in Excel, then paste them here (Ctrl+V). Keep the original column order."></textarea>
+      <select id="trackerPasteType" aria-label="Pasted data type"><option value="CV Shared">CV Shared</option><option value="Interview Tracker">Interview Tracker</option><option value="Shortlisted Offered">Shortlisted / Offered</option><option value="Fint Sol">Candidate Sourcing</option><option value="Weekly Tracker">Weekly Summary</option></select>
+      <button id="preparePastedTracker" class="secondary-button" type="button">Preview pasted data</button>
+    </section>
     <section id="importWorksheets" class="import-worksheets" hidden><div class="import-preview-heading"><div><h3>Detected worksheets</h3><p id="importWorkbookSummary"></p></div><label class="header-row-select">Preview worksheet<select id="importSheet"></select></label></div><div id="importSheetChoices" class="import-sheet-choices"></div><p id="importSheetDetails" class="import-sheet-details"></p><div class="table-wrap import-preview-wrap"><table class="import-preview-table import-raw-preview"><thead id="importPreviewHead"></thead><tbody id="importPreviewRows"></tbody></table></div></section>
     <div id="importError" class="form-error" role="alert"></div>
     <div class="dialog-actions"><button class="secondary-button" type="button" data-close-import>Cancel</button><button id="confirmImportOne" class="secondary-button" type="button" disabled>Import this worksheet</button><button id="confirmImport" class="primary-button" type="button" disabled>Import selected worksheets</button></div>

@@ -694,6 +694,36 @@ app.post('/api/ta-cv-shares', asyncRoute(async (req, res) => {
   const record = { id: uid(), ...clean, imported: false, createdAt: now(), updatedAt: now() };
   db.taCvShares.push(record); save(db); await flush(database); res.status(201).json(record);
 }));
+app.post('/api/ta-cv-shares/import', asyncRoute(async (req, res) => {
+  const rows = req.body?.rows;
+  if (!Array.isArray(rows) || !rows.length || rows.length > 10000) return res.status(400).json({ error: 'Paste between 1 and 10,000 CV share rows.' });
+  const db = load(); db.taCvShares ||= [];
+  const normalizeShare = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const key = row => [row.sharedAt, row.recruiter, row.shareStatus, row.company, row.role, row.candidateName].map(normalizeShare).join('|');
+  const existing = new Set(db.taCvShares.map(key));
+  const timestamp = now(); let imported = 0, duplicates = 0, blank = 0;
+  for (let index = 0; index < rows.length; index++) {
+    if (!String(rows[index]?.candidateName || '').trim()) { blank++; continue; }
+    const { clean, error } = cleanCvShareInput(rows[index]);
+    if (error) return res.status(400).json({ error: `Row ${index + 1}: ${error}` });
+    const rowKey = key(clean);
+    if (existing.has(rowKey)) { duplicates++; continue; }
+    existing.add(rowKey);
+    db.taCvShares.push({ id: uid(), ...clean, imported: true, createdAt: timestamp, updatedAt: timestamp });
+    imported++;
+  }
+  if (imported) { save(db); await flush(database); }
+  res.json({ imported, duplicates, blank, total: rows.length });
+}));
+app.post('/api/ta-cv-shares/bulk-delete', asyncRoute(async (req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids) || !ids.length || ids.length > 10000 || ids.some(id => typeof id !== 'string')) return res.status(400).json({ error: 'Select between 1 and 10,000 CV shares to delete.' });
+  const selected = new Set(ids), db = load(), before = db.taCvShares.length;
+  db.taCvShares = db.taCvShares.filter(share => !selected.has(share.id));
+  const deleted = before - db.taCvShares.length;
+  if (deleted) { save(db); await flush(database); }
+  res.json({ deleted });
+}));
 app.put('/api/ta-cv-shares/:id', asyncRoute(async (req, res) => {
   const { clean, error } = cleanCvShareInput(req.body, true);
   if (error) return res.status(400).json({ error });

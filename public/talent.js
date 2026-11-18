@@ -4,6 +4,9 @@ const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '
 let candidates = [];
 let cvShares = [];
 const selectedCandidateIds = new Set();
+const selectedCvShareIds = new Set();
+let cvSharePage = 0;
+let visibleCvSharePageIds = [];
 let busy = false;
 const api = async (url, method = 'GET', body) => {
   const response = await fetch('/api' + url, {
@@ -75,7 +78,7 @@ function populateYearFilters() {
     candidate.interviewDate, candidate.sharedDate, candidate.doj, candidate.offeredDate,
     candidate.shortlistedDate, candidate.createdAt,
     ...(candidate.interviews || []).map(item => item.date)
-  ]).concat(cvShares.map(share => share.sharedAt));
+  ]).concat(cvShares.map(cvShareDate));
   const years = [...new Set(dates.map(normalizedDateKey).map(key => key.slice(0, 4)).filter(year => /^\d{4}$/.test(year)))].sort((a, b) => b.localeCompare(a));
   $('#filterYear').innerHTML = `<option value="">All years</option>${years.map(year => `<option value="${year}">${year}</option>`).join('')}`;
   $('#filterYear').value = years.includes(current) ? current : '';
@@ -230,6 +233,10 @@ $('#candidateForm').addEventListener('submit', submitCandidate);
 $('#addCandidate').addEventListener('click', () => openDialog());
 $('#emptyAdd').addEventListener('click', () => openDialog());
 $('#addCvShare').addEventListener('click', () => openCvShareDialog());
+$('#pasteCvShares').addEventListener('click', () => { $('#pasteCvSharesError').textContent = ''; $('#pasteCvSharesDialog').showModal(); $('#pasteCvSharesText').focus(); });
+$('#pasteCvSharesForm').addEventListener('submit', importPastedCvShares);
+$('#closePasteCvShares').addEventListener('click', () => $('#pasteCvSharesDialog').close());
+$('#cancelPasteCvShares').addEventListener('click', () => $('#pasteCvSharesDialog').close());
 $('#cvShareForm').addEventListener('submit', submitCvShare);
 $('#closeCvShareDialog').addEventListener('click', () => $('#cvShareDialog').close());
 $('#cancelCvShareDialog').addEventListener('click', () => $('#cvShareDialog').close());
@@ -241,10 +248,32 @@ $('#cvShareRows').addEventListener('click', async event => {
   try { await api(`/ta-cv-shares/${encodeURIComponent(share.id)}`, 'DELETE'); await loadCvShares(); }
   catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
 });
+$('#cvShareRows').addEventListener('change', event => {
+  const box = event.target.closest('[data-cv-share-select]'); if (!box) return;
+  if (box.checked) selectedCvShareIds.add(box.dataset.cvShareSelect); else selectedCvShareIds.delete(box.dataset.cvShareSelect);
+  renderCvShares();
+});
+$('#selectAllCvShares').addEventListener('change', event => {
+  visibleCvSharePageIds.forEach(id => event.target.checked ? selectedCvShareIds.add(id) : selectedCvShareIds.delete(id));
+  renderCvShares();
+});
+$('#cvSharePrevPage').addEventListener('click', () => { cvSharePage = Math.max(0, cvSharePage - 1); renderCvShares(); });
+$('#cvShareNextPage').addEventListener('click', () => { cvSharePage++; renderCvShares(); });
+$('#clearCvShareSelection').addEventListener('click', () => { selectedCvShareIds.clear(); renderCvShares(); });
+$('#deleteSelectedCvShares').addEventListener('click', async event => {
+  const ids = [...selectedCvShareIds]; if (!ids.length || !confirm(`Delete ${ids.length} selected CV share${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+  const button = event.currentTarget; button.disabled = true;
+  try {
+    const result = await api('/ta-cv-shares/bulk-delete', 'POST', { ids });
+    selectedCvShareIds.clear(); await loadCvShares();
+    $('#workspaceMessage').textContent = `Deleted ${result.deleted} CV share${result.deleted === 1 ? '' : 's'}.`; $('#workspaceMessage').hidden = false;
+  } catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
+  finally { button.disabled = false; }
+});
 $('#search').addEventListener('input', render);
 $('#stageFilter').addEventListener('change', render);
-['filterMonth', 'filterDate', 'filterYear', 'dateSort'].forEach(id => $(`#${id}`).addEventListener('change', () => { render(); renderTrackers(); }));
-$('#clearDateFilters').addEventListener('click', () => { $('#filterMonth').value = ''; $('#filterDate').value = ''; $('#filterYear').value = ''; $('#dateSort').value = 'newest'; render(); renderTrackers(); });
+['filterMonth', 'filterDate', 'filterYear', 'dateSort'].forEach(id => $(`#${id}`).addEventListener('change', () => { cvSharePage = 0; render(); renderTrackers(); }));
+$('#clearDateFilters').addEventListener('click', () => { $('#filterMonth').value = ''; $('#filterDate').value = ''; $('#filterYear').value = ''; $('#dateSort').value = 'newest'; cvSharePage = 0; render(); renderTrackers(); });
 $('#closeDialog').addEventListener('click', () => $('#candidateDialog').close());
 $('#cancelDialog').addEventListener('click', () => $('#candidateDialog').close());
 $('#logout').addEventListener('click', async () => {
@@ -287,19 +316,33 @@ function renderCvShares() {
   const fields = ['recruiter', 'shareStatus', 'company', 'role', 'candidateName', 'designation', 'location', 'workLocation', 'experience', 'currentCompany', 'currentCtc', 'expectedCtc', 'noticePeriod', 'remarks', 'phone', 'email'];
   const rows = cvShares.filter(share => dateFilterMatch(cvShareDate(share)) && fields.some(field => String(share[field] || '').toLowerCase().includes(query)));
   rows.sort((a, b) => compareDates(cvShareDate(a), cvShareDate(b)));
+  const pageSize = 200, pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  cvSharePage = Math.min(cvSharePage, pageCount - 1);
+  const pageRows = rows.slice(cvSharePage * pageSize, (cvSharePage + 1) * pageSize);
+  visibleCvSharePageIds = pageRows.map(share => share.id);
   const dateCounts = new Map();
   rows.forEach(share => { const date = cvShareDate(share); dateCounts.set(date, (dateCounts.get(date) || 0) + 1); });
   const cell = value => `<td>${escapeHTML(value || '—')}</td>`;
   let lastDate = null;
-  $('#cvShareRows').innerHTML = rows.map(share => {
-    const date = cvShareDate(share), band = date !== lastDate ? `<tr class="date-band"><th colspan="18">${escapeHTML(date ? displayDate(`${date}T12:00:00`) : 'Date not set')} <span>${dateCounts.get(date)} CV shares</span></th></tr>` : '';
+  $('#cvShareRows').innerHTML = pageRows.map(share => {
+    const date = cvShareDate(share), band = date !== lastDate ? `<tr class="date-band"><th colspan="19">${escapeHTML(date ? displayDate(`${date}T12:00:00`) : 'Date not set')} <span>${dateCounts.get(date)} CV shares</span></th></tr>` : '';
     lastDate = date;
-    return `${band}<tr>${cell(share.sharedAt)}${cell(share.recruiter)}${cell(share.shareStatus)}${cell(share.company)}${cell(share.role)}${cell(share.candidateName)}${cell(share.designation)}${cell(share.location)}${cell(share.workLocation)}${cell(share.experience)}${cell(share.currentCompany)}${cell(share.currentCtc)}${cell(share.expectedCtc)}${cell(share.noticePeriod)}${cell(share.remarks)}${cell(share.phone)}${cell(share.email)}<td><button class="action-button" type="button" data-edit-cv-share="${escapeHTML(share.id)}">Edit</button><button class="action-button delete" type="button" data-delete-cv-share="${escapeHTML(share.id)}">Delete</button></td></tr>`;
+    return `${band}<tr><td><input type="checkbox" data-cv-share-select="${escapeHTML(share.id)}" aria-label="Select CV share for ${escapeHTML(share.candidateName)}" ${selectedCvShareIds.has(share.id) ? 'checked' : ''}></td>${cell(share.sharedAt)}${cell(share.recruiter)}${cell(share.shareStatus)}${cell(share.company)}${cell(share.role)}${cell(share.candidateName)}${cell(share.designation)}${cell(share.location)}${cell(share.workLocation)}${cell(share.experience)}${cell(share.currentCompany)}${cell(share.currentCtc)}${cell(share.expectedCtc)}${cell(share.noticePeriod)}${cell(share.remarks)}${cell(share.phone)}${cell(share.email)}<td><button class="action-button" type="button" data-edit-cv-share="${escapeHTML(share.id)}">Edit</button><button class="action-button delete" type="button" data-delete-cv-share="${escapeHTML(share.id)}">Delete</button></td></tr>`;
   }).join('');
   $('#cvShareEmpty').hidden = rows.length > 0;
+  const selectedVisible = pageRows.filter(share => selectedCvShareIds.has(share.id)).length;
+  $('#selectAllCvShares').checked = pageRows.length > 0 && selectedVisible === pageRows.length;
+  $('#selectAllCvShares').indeterminate = selectedVisible > 0 && selectedVisible < pageRows.length;
+  $('#selectedCvShareCount').textContent = selectedCvShareIds.size;
+  $('#cvShareBulkActions').hidden = selectedCvShareIds.size === 0;
+  $('#selectAllCvShares').disabled = pageRows.length === 0;
+  $('#cvSharePagination').hidden = rows.length <= pageSize;
+  $('#cvSharePageSummary').textContent = `${rows.length ? cvSharePage * pageSize + 1 : 0}–${Math.min((cvSharePage + 1) * pageSize, rows.length)} of ${rows.length}`;
+  $('#cvSharePrevPage').disabled = cvSharePage === 0;
+  $('#cvShareNextPage').disabled = cvSharePage >= pageCount - 1;
 }
 async function loadCvShares() {
-  try { cvShares = await api('/ta-cv-shares'); populateYearFilters(); renderTrackers(); }
+  try { cvShares = await api('/ta-cv-shares'); const ids = new Set(cvShares.map(share => share.id)); for (const id of selectedCvShareIds) if (!ids.has(id)) selectedCvShareIds.delete(id); populateYearFilters(); renderTrackers(); }
   catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
 }
 function localDateKey(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
@@ -376,6 +419,53 @@ async function submitCvShare(event) {
   } catch (error) { $('#cvShareFormError').textContent = error.message; }
   finally { button.disabled = false; }
 }
+function pastedShareDate(value) {
+  const input = String(value || '').trim();
+  let match = input.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (match) return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
+  match = input.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
+  if (match) { let [, day, month, year] = match; if (Number(day) <= 12 && Number(month) > 12) [day, month] = [month, day]; if (Number(year) < 100) year = String(Number(year) < 50 ? 2000 + Number(year) : 1900 + Number(year)); return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`; }
+  const parsed = Date.parse(input);
+  return Number.isNaN(parsed) ? '' : new Date(parsed).toISOString().slice(0, 10);
+}
+function parsePastedCvShares(input) {
+  const rows = String(input || '').replace(/^\uFEFF/, '').split(/\r?\n/).map(line => line.split('\t').map(value => value.trim()));
+  const output = []; let currentDate = '', explicitDateColumn = false;
+  for (const row of rows) {
+    if (!row.some(Boolean)) continue;
+    const first = row[0] || '';
+    const headers = row.map(normalizeHeader);
+    const candidateColumn = headers.findIndex(value => ['candidate', 'candidate name'].includes(value));
+    if (candidateColumn >= 0) { explicitDateColumn = headers.some(value => ['date', 'share date', 'shared date'].includes(value)); continue; }
+    if (first && row.slice(1).every(value => !value)) {
+      const date = pastedShareDate(first);
+      if (date) { currentDate = date; continue; }
+    }
+    if (/^recruiter$/i.test(first)) continue;
+    const offset = explicitDateColumn ? 1 : 0;
+    const candidateName = row[4 + offset] || '';
+    if (!candidateName) continue;
+    output.push({ sharedAt: explicitDateColumn ? pastedShareDate(row[0]) : currentDate, recruiter: row[offset] || '', shareStatus: row[1 + offset] || '', company: row[2 + offset] || '', role: row[3 + offset] || '', candidateName, designation: row[5 + offset] || '', location: row[6 + offset] || '', workLocation: row[7 + offset] || '', experience: row[8 + offset] || '', currentCompany: row[9 + offset] || '', currentCtc: row[10 + offset] || '', expectedCtc: row[11 + offset] || '', noticePeriod: row[12 + offset] || '', remarks: row[13 + offset] || '', phone: row[14 + offset] || '', email: row[15 + offset] || '' });
+  }
+  return output;
+}
+async function importPastedCvShares(event) {
+  event.preventDefault();
+  const textarea = $('#pasteCvSharesText'), button = $('#submitPasteCvShares'), errorBox = $('#pasteCvSharesError');
+  errorBox.textContent = '';
+  const rows = parsePastedCvShares(textarea.value);
+  if (!rows.length) { errorBox.textContent = 'No CV share rows found. Copy rows in the CV Shared worksheet layout, including the Candidate column.'; return; }
+  if (rows.length > 10000) { errorBox.textContent = 'Paste up to 10,000 rows at a time.'; return; }
+  button.disabled = true; button.textContent = `Importing ${rows.length} rows…`;
+  try {
+    const result = await api('/ta-cv-shares/import', 'POST', { rows });
+    $('#pasteCvSharesDialog').close(); textarea.value = '';
+    await loadCvShares();
+    $('#workspaceMessage').textContent = `Paste import complete: ${result.imported} imported, ${result.duplicates} duplicates skipped, ${result.blank} blank rows skipped.`;
+    $('#workspaceMessage').hidden = false;
+  } catch (error) { errorBox.textContent = error.message; }
+  finally { button.disabled = false; button.textContent = 'Import pasted rows'; }
+}
 let importWorkbook = null, importFile = null, importFileBase64 = '', importSheets = [], activeImportSheet = '';
 const normalizeHeader = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 function worksheetType(name) {
@@ -399,7 +489,16 @@ function worksheetHeader(grid, kind) {
   return best;
 }
 function sheetGrid(sheet) {
-  const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '', blankrows: true });
+  const originalRef = sheet['!ref']; let minRow = Infinity, minCol = Infinity, maxRow = -1, maxCol = -1;
+  for (const address of Object.keys(sheet)) {
+    if (address[0] === '!' || !/^[A-Z]{1,3}\d+$/.test(address)) continue;
+    const cell = sheet[address]; if (!cell || (cell.v === undefined && !cell.f)) continue;
+    const point = XLSX.utils.decode_cell(address); minRow = Math.min(minRow, point.r); minCol = Math.min(minCol, point.c); maxRow = Math.max(maxRow, point.r); maxCol = Math.max(maxCol, point.c);
+  }
+  if (maxRow >= 0) sheet['!ref'] = XLSX.utils.encode_range({ s: { r: minRow, c: minCol }, e: { r: maxRow, c: maxCol } });
+  let grid;
+  try { grid = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '', blankrows: true }); }
+  finally { sheet['!ref'] = originalRef; }
   for (const merge of sheet['!merges'] || []) {
     const value = grid[merge.s.r]?.[merge.s.c];
     if (value === undefined || value === '') continue;
@@ -436,6 +535,7 @@ function renderImportSheetPreview() {
 }
 async function loadImportFile(file) {
   $('#importError').textContent = '';
+  $('#importWorkbookSummary').textContent = 'Reading workbook and preparing worksheet previews…';
   if (!window.XLSX) throw new Error('The Excel reader did not load. Refresh the page and try again.');
   if (file.size > 20 * 1024 * 1024) throw new Error('Excel workbooks are limited to 20 MB.');
   const bytes = await file.arrayBuffer();
@@ -454,9 +554,36 @@ async function loadImportFile(file) {
   $('#importWorksheets').hidden = false;
   renderImportSheetList();
 }
+function preparePastedTracker() {
+  $('#importError').textContent = '';
+  const input = $('#trackerPasteText').value.trim();
+  if (!input) { $('#importError').textContent = 'Copy cells from Excel and paste them into the box first.'; return; }
+  if (!window.XLSX) { $('#importError').textContent = 'The Excel reader did not load. Refresh the page and try again.'; return; }
+  const source = input.replace(/^\uFEFF/, ''), grid = [], row = []; let cell = '', quoted = false;
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    if (char === '"') { if (quoted && source[i + 1] === '"') { cell += '"'; i++; } else quoted = !quoted; }
+    else if (char === '\t' && !quoted) { row.push(cell.trim()); cell = ''; }
+    else if ((char === '\n' || char === '\r') && !quoted) { if (char === '\r' && source[i + 1] === '\n') i++; row.push(cell.trim()); grid.push(row.splice(0)); cell = ''; }
+    else cell += char;
+  }
+  if (cell || row.length) { row.push(cell.trim()); grid.push(row); }
+  if (grid.length > 10000) { $('#importError').textContent = 'Paste up to 10,000 rows at a time.'; return; }
+  const name = $('#trackerPasteType').value, workbook = XLSX.utils.book_new(), sheet = XLSX.utils.aoa_to_sheet(grid);
+  XLSX.utils.book_append_sheet(workbook, sheet, name);
+  const base64 = XLSX.write(workbook, { type: 'base64', bookType: 'xlsx' });
+  if (base64.length > 28_000_000) { $('#importError').textContent = 'This pasted sheet is over the 20 MB import limit. Paste fewer rows at a time.'; return; }
+  importWorkbook = workbook; importFile = { name: `pasted-${name.replace(/\s+/g, '-').toLowerCase()}.xlsx` }; importFileBase64 = base64;
+  const kind = worksheetType(name), headerIndex = worksheetHeader(grid, kind);
+  importSheets = [{ name, grid, kind, hidden: false, headerIndex: headerIndex < 0 ? 0 : headerIndex, merges: 0, populatedRows: grid.filter(row => row.some(value => String(value ?? '').trim())).length, selected: true }];
+  activeImportSheet = name;
+  $('#importWorkbookSummary').textContent = `1 pasted worksheet ready to import (${importSheets[0].populatedRows} populated rows).`;
+  $('#importWorksheets').hidden = false;
+  renderImportSheetList();
+}
 async function submitHistoricalImport(names, individual = false) {
   const button = individual ? $('#confirmImportOne') : $('#confirmImport');
-  button.disabled = true; button.textContent = 'Importing?'; $('#importError').textContent = '';
+  button.disabled = true; button.textContent = 'Importing…'; $('#importError').textContent = '';
   try {
     const result = await api('/ta-imports', 'POST', { workbookBase64: importFileBase64, sourceName: importFile?.name || 'Historical workbook', sheets: names });
     const details = result.worksheets.map(sheet => `${sheet.name}: ${sheet.status === 'imported' ? `${sheet.recordsImported} records, ${sheet.candidatesCreated} new candidates, ${sheet.interviewsAdded} interviews` : sheet.status}`).join('\n');
@@ -476,6 +603,7 @@ async function loadImportReports() {
 }
 $('#importTracker').addEventListener('click', () => { $('#trackerImportForm').reset(); $('#trackerImportFile').value = ''; $('#importError').textContent = ''; $('#importWorksheets').hidden = true; importWorkbook = null; importFile = null; importFileBase64 = ''; importSheets = []; activeImportSheet = ''; $('#confirmImport').disabled = true; $('#confirmImportOne').disabled = true; $('#trackerImportDialog').showModal(); });
 $('#trackerImportFile').addEventListener('change', async event => { const file = event.target.files?.[0]; if (!file) return; try { await loadImportFile(file); } catch (error) { $('#importError').textContent = error.message; } });
+$('#preparePastedTracker').addEventListener('click', preparePastedTracker);
 $('#importSheet').addEventListener('change', () => { activeImportSheet = $('#importSheet').value; renderImportSheetPreview(); $('#confirmImportOne').disabled = !activeImportSheet; });
 $('#importSheetChoices').addEventListener('change', event => { const input = event.target.closest('[data-import-worksheet]'); if (!input) return; const sheet = importSheets.find(item => item.name === input.dataset.importWorksheet); if (sheet) sheet.selected = input.checked; $('#confirmImport').disabled = !importSheets.some(item => item.selected); });
 $('#confirmImportOne').addEventListener('click', () => submitHistoricalImport([activeImportSheet], true));
@@ -489,7 +617,7 @@ document.querySelectorAll('[data-tab]').forEach(button => button.addEventListene
 }));
 document.querySelectorAll('[data-add-candidate]').forEach(button => button.addEventListener('click', addCandidate));
 document.querySelectorAll('[data-export]').forEach(button => button.addEventListener('click', exportExcel));
-document.querySelectorAll('[data-search]').forEach(input => input.addEventListener('input', renderTrackers));
+document.querySelectorAll('[data-search]').forEach(input => input.addEventListener('input', () => { cvSharePage = 0; renderTrackers(); }));
 document.querySelectorAll('#interviewRows, #offerRows').forEach(body => body.addEventListener('change', async event => {
   const select = event.target.closest('select[data-candidate-stage]'); if (!select) return;
   const candidate = candidates.find(c => c.id === select.dataset.candidateStage); if (!candidate) return;
