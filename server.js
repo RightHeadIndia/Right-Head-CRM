@@ -239,7 +239,7 @@ const STAGES = ['new', 'contacted', 'replied', 'onboarded', 'rejected'];
 const CANDIDATE_STAGES = ['Screening', 'Interview', 'Shortlisted', 'Offer', 'Joining', 'Rejected', 'Blacklisted'];
 const LEGACY_CANDIDATE_STAGES = { Unspecified: 'Screening', Applied: 'Screening', Hired: 'Joining' };
 function candidateImportStage(stage) { return LEGACY_CANDIDATE_STAGES[stage] || (CANDIDATE_STAGES.includes(stage) ? stage : 'Screening'); }
-function cleanCvShareInput(value, partial = false) {
+function cleanCvShareInput(value, partial = false, validateEmail = true) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'CV share data must be an object' };
   const limits = { sharedAt: 10, recruiter: 200, shareStatus: 250, company: 200, role: 200, candidateName: 200, designation: 200, location: 200, workLocation: 250, experience: 100, currentCompany: 200, currentCtc: 100, expectedCtc: 100, noticePeriod: 120, remarks: 3000, phone: 50, email: 254 };
   const clean = {};
@@ -249,7 +249,7 @@ function cleanCvShareInput(value, partial = false) {
     clean[field] = String(value[field] || '').trim().slice(0, max);
   }
   if (!partial && !clean.candidateName) return { error: 'Candidate name is required.' };
-  if (clean.email && !EMAIL_PATTERN.test(clean.email)) return { error: 'Email is not valid.' };
+  if (validateEmail && clean.email && !EMAIL_PATTERN.test(clean.email)) return { error: 'Email is not valid.' };
   if (clean.sharedAt && (!/^\d{4}-\d{2}-\d{2}$/.test(clean.sharedAt) || Number.isNaN(new Date(`${clean.sharedAt}T00:00:00Z`).getTime()))) return { error: 'Choose a valid share date.' };
   return { clean };
 }
@@ -698,22 +698,35 @@ app.post('/api/ta-cv-shares/import', asyncRoute(async (req, res) => {
   const rows = req.body?.rows;
   if (!Array.isArray(rows) || !rows.length || rows.length > 10000) return res.status(400).json({ error: 'Paste between 1 and 10,000 CV share rows.' });
   const db = load(); db.taCvShares ||= [];
+  const headerKey = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const isLegacyHeader = share => share.imported && headerKey(share.recruiter) === 'date' && headerKey(share.shareStatus) === 'recruiter' && headerKey(share.candidateName) === 'profile';
+  const oldLength = db.taCvShares.length;
+  db.taCvShares = db.taCvShares.filter(share => !isLegacyHeader(share));
+  const removedHeaders = oldLength - db.taCvShares.length;
   const normalizeShare = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const key = row => [row.sharedAt, row.recruiter, row.shareStatus, row.company, row.role, row.candidateName].map(normalizeShare).join('|');
   const existing = new Set(db.taCvShares.map(key));
-  const timestamp = now(); let imported = 0, duplicates = 0, blank = 0;
+  const timestamp = now(); let imported = 0, repaired = 0, duplicates = 0, blank = 0;
   for (let index = 0; index < rows.length; index++) {
     if (!String(rows[index]?.candidateName || '').trim()) { blank++; continue; }
-    const { clean, error } = cleanCvShareInput(rows[index]);
+    const { clean, error } = cleanCvShareInput(rows[index], false, false);
     if (error) return res.status(400).json({ error: `Row ${index + 1}: ${error}` });
     const rowKey = key(clean);
     if (existing.has(rowKey)) { duplicates++; continue; }
+    // Older paste imports treated an empty leading Excel cell as the Date
+    // column. Repair those saved rows in place using the corrected pasted row.
+    const shifted = db.taCvShares.find(share => share.imported && !share.sharedAt && /^\d{4}-\d{2}-\d{2}/.test(String(share.recruiter || '')) && normalizeShare(share.designation) === normalizeShare(clean.candidateName) && normalizeShare(share.role) === normalizeShare(clean.company));
+    if (shifted) {
+      Object.assign(shifted, clean, { updatedAt: timestamp });
+      existing.add(rowKey); repaired++;
+      continue;
+    }
     existing.add(rowKey);
     db.taCvShares.push({ id: uid(), ...clean, imported: true, createdAt: timestamp, updatedAt: timestamp });
     imported++;
   }
-  if (imported) { save(db); await flush(database); }
-  res.json({ imported, duplicates, blank, total: rows.length });
+  if (imported || repaired || removedHeaders) { save(db); await flush(database); }
+  res.json({ imported, repaired, removedHeaders, duplicates, blank, total: rows.length });
 }));
 app.post('/api/ta-cv-shares/bulk-delete', asyncRoute(async (req, res) => {
   const ids = req.body?.ids;
@@ -773,20 +786,21 @@ app.get('/api/ta-export.xlsx', asyncRoute(async (req, res) => {
   const cvShareRows = (db.taCvShares || []).map(share => ({ 'Share Date': share.sharedAt || '', Recruiter: share.recruiter || '', 'Share Status / Time': share.shareStatus || '', Company: share.company || '', Profile: share.role || '', Candidate: share.candidateName || '', Designation: share.designation || '', Location: share.location || '', 'Work Location': share.workLocation || '', Experience: share.experience || '', 'Current Company': share.currentCompany || '', 'Current CTC': share.currentCtc || '', 'Expected CTC': share.expectedCtc || '', 'Notice Period': share.noticePeriod || '', Remarks: share.remarks || '', Phone: share.phone || '', Email: share.email || '' }));
   const reports = db.weeklyReports.filter(r => r.weekStart === weekStart);
   const weeklyRows = [];
-  for (const recruiter of new Set([...candidates.flatMap(c => [c.recruiter, ...(c.interviews || []).map(i => i.recruiter)]).filter(Boolean), ...reports.map(r => r.recruiter)])) {
+  for (const recruiter of new Set([...candidates.flatMap(c => [c.recruiter, ...(c.interviews || []).map(i => i.recruiter)]).filter(Boolean), ...(db.taCvShares || []).map(share => share.recruiter).filter(Boolean), ...reports.map(r => r.recruiter)])) {
     for (const metric of TA_METRICS) {
       const row = { Recruiter: recruiter, Metric: metric };
       for (let offset = 0; offset < 6; offset++) {
         const date = new Date(`${weekStart}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + offset);
         const day = TA_DAYS[offset], dayKey = date.toISOString().slice(0, 10);
-        const count = candidates.filter(c => {
-          if (metric === TA_METRICS[0]) return c.interviews?.length ? c.interviews.some(i => String(i.recruiter || c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && String(i.sharedDate || '').slice(0, 10) === dayKey) : String(c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && (c.sharedDate || (c.imported ? '' : c.createdAt) || '').slice(0, 10) === dayKey;
+        const count = metric === TA_METRICS[0] ? (db.taCvShares || []).filter(share => String(share.recruiter || '').toLowerCase() === recruiter.toLowerCase() && String(share.sharedAt || '').slice(0, 10) === dayKey).length : candidates.filter(c => {
           const stage = metric === TA_METRICS[1] ? 'Shortlisted' : metric === TA_METRICS[2] ? 'Offer' : 'Joining';
           return (c.statusHistory || []).some(h => String(h.recruiter || c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && h.at.slice(0, 10) === dayKey && h.stage === stage);
         }).length;
         const manual = reports.find(r => r.recruiter === recruiter)?.manual?.[metric]?.[day] || {};
         row[`${day} Count/Names`] = metric === TA_METRICS[3] ? candidates.filter(c => (c.statusHistory || []).some(h => String(h.recruiter || c.recruiter || '').toLowerCase() === recruiter.toLowerCase() && h.at.slice(0, 10) === dayKey && h.stage === 'Joining')).map(c => c.name).join(', ') : count;
-        row[`${day} Target`] = manual.target; row[`${day} Achievement`] = manual.achievement;
+        row[`${day} Target`] = manual.target ?? (metric === TA_METRICS[0] ? 4 : undefined);
+        row[`${day} Achievement`] = manual.achievement;
+        if (metric === TA_METRICS[0]) row[`${day} Target Ratio`] = Number(row[`${day} Target`]) > 0 ? `${Math.round(count / Number(row[`${day} Target`]) * 100)}%` : '';
       }
       weeklyRows.push(row);
     }
