@@ -79,6 +79,7 @@ test('candidate pipeline supports validation, updates, and deletion', async () =
   });
   assert.equal(talentLogin.status, 200);
   cookie = talentLogin.headers.get('set-cookie').split(';')[0];
+  assert.equal((await call('GET', '/api/recruit-iq/ai-status')).json.configured, false);
   assert.equal((await call('GET', '/talent.html')).status, 200);
   assert.equal((await call('GET', '/api/clients')).status, 401);
   assert.equal((await call('POST', '/api/candidates', { role: 'Designer' })).status, 400);
@@ -103,6 +104,84 @@ test('candidate pipeline supports validation, updates, and deletion', async () =
   });
   assert.equal(crmLogin.status, 200);
   cookie = crmLogin.headers.get('set-cookie').split(';')[0];
+});
+
+test('RecruitIQ jobs, central candidate records, processing states, and exports use Talent access', async () => {
+  const noAccess = await call('GET', '/api/recruit-iq', undefined, { nocookie: true });
+  assert.equal(noAccess.status, 401);
+  const talentLogin = await call('POST', '/api/auth/login', {
+    product: 'talent', email: 'avvni.sharrma@righthead.in', password: TALENT_PASSWORD
+  });
+  assert.equal(talentLogin.status, 200);
+  cookie = talentLogin.headers.get('set-cookie').split(';')[0];
+
+  const invalid = await call('POST', '/api/recruit-iq/jobs', { title: 'Engineer', description: 'Too short' });
+  assert.equal(invalid.status, 400);
+  const created = await call('POST', '/api/recruit-iq/jobs', {
+    title: 'RecruitIQ Test Engineer',
+    description: 'We require an engineer with five years of experience building reliable software systems.',
+    requirements: { skills: ['Node.js'], mandatory: ['Five years of experience'] }
+  });
+  assert.equal(created.status, 200);
+  assert.equal(created.json.requirements.weights.Skills, 30);
+  assert.equal((await call('PUT', `/api/recruit-iq/jobs/${created.json.id}`, {
+    requirements: { weights: { Skills: 29, 'Relevant experience': 20, 'Industry experience': 15, 'Role and responsibilities': 15, Education: 10, 'Tools and certifications': 10 } }
+  })).status, 400);
+
+  const taCandidate = await call('POST', '/api/candidates', { name: 'Existing Talent Candidate', role: 'Engineer', email: 'recruitiq-test@example.com' });
+  assert.equal(taCandidate.status, 200);
+  const candidate = await call('POST', '/api/recruit-iq/candidates', { name: 'RecruitIQ Test Candidate', email: 'recruitiq-test@example.com', phone: '9876543210' });
+  assert.equal(candidate.status, 200);
+  assert.equal(candidate.json.talentCandidateId, taCandidate.json.id);
+  assert.equal((await call('POST', '/api/recruit-iq/candidates', { name: 'Duplicate', email: 'recruitiq-test@example.com' })).status, 409);
+  const status = await call('PUT', `/api/recruit-iq/candidates/${candidate.json.id}`, {
+    status: 'Interview Scheduled', recruiter: 'Test recruiter', comments: 'Review experience', followUpDate: '2026-12-01'
+  });
+  assert.equal(status.status, 200);
+  assert.equal(status.json.status, 'Interview Scheduled');
+  assert.equal((await call('PUT', `/api/recruit-iq/candidates/${candidate.json.id}`, { status: 'Auto Rejected' })).status, 400);
+  const detail = await call('GET', `/api/recruit-iq/candidates/${candidate.json.id}`);
+  assert.equal(detail.json.candidate.recruiter, 'Test recruiter');
+  assert.match(detail.json.candidate.history.at(-1).type, /Status changed to Interview Scheduled/);
+
+  const cv = Buffer.from('Candidate: Taylor Example\\nExperienced software engineer with eight years of hands-on Node.js development, designing reliable applications and mentoring teams.').toString('base64');
+  const uploads = await call('POST', '/api/recruit-iq/uploads', { jobId: created.json.id, files: [{ name: 'candidate.txt', data: cv }] });
+  assert.equal(uploads.status, 202);
+  assert.equal(uploads.json[0].status, 'queued');
+  assert.equal(Object.hasOwn(uploads.json[0], 'fileData'), false);
+  let processing;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    processing = await call('GET', '/api/recruit-iq/uploads');
+    const item = processing.json.find(row => row.id === uploads.json[0].id);
+    if (item?.status === 'failed') break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  const failed = processing.json.find(row => row.id === uploads.json[0].id);
+  assert.equal(failed.status, 'failed');
+  assert.match(failed.error, /AI is not set up/);
+  const retry = await call('POST', `/api/recruit-iq/uploads/${failed.id}/retry`, {});
+  assert.equal(retry.status, 202);
+  assert.equal(Object.hasOwn(retry.json, 'fileData'), false);
+
+  const overview = await call('GET', '/api/recruit-iq');
+  assert.equal(overview.json.dashboard.totalJobs, 1);
+  assert.equal(overview.json.dashboard.failedProcessing, 1);
+  assert.equal(Object.hasOwn(overview.json.processing[0], 'fileData'), false);
+  const exportResult = await fetch(`${base}/api/recruit-iq/export.xlsx`, { headers: { cookie } });
+  assert.equal(exportResult.status, 200);
+  assert.match(exportResult.headers.get('content-type'), /spreadsheetml/);
+  const XLSX = require('xlsx');
+  const workbook = XLSX.read(Buffer.from(await exportResult.arrayBuffer()), { type: 'buffer' });
+  assert.deepEqual(workbook.SheetNames, ['Screening report', 'Candidates', 'Shortlisted', 'Evidence']);
+  assert.equal(XLSX.utils.sheet_to_json(workbook.Sheets.Candidates)[0].Name, 'RecruitIQ Test Candidate');
+  assert.equal(XLSX.utils.sheet_to_json(workbook.Sheets.Shortlisted)[0].Status, 'Interview Scheduled');
+
+  const crmLogin = await call('POST', '/api/auth/login', {
+    product: 'crm', email: 'contact@righthead.in', password: CRM_PASSWORD
+  });
+  assert.equal(crmLogin.status, 200);
+  cookie = crmLogin.headers.get('set-cookie').split(';')[0];
+  assert.equal((await call('GET', '/api/recruit-iq')).status, 401);
 });
 
 test('tracker import keeps historical interviews on one candidate, skips duplicates, and preserves explicit status dates', async () => {
