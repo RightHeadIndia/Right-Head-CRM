@@ -4,11 +4,29 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RightHead HR Health Check</title>
+<meta name="theme-color" content="#f4f8fb">
+<link rel="icon" type="image/png" href="Right head Logo.png">
+<script src="theme.js"></script>
 <style>
 :root{
+  color-scheme: light;
   --blue:#3C74B9;--blue-dark:#2C5A93;--navy:#004D75;--teal:#55C9D0;--orange:#FC8C37;
-  --ink:#1B3A55;--muted:#6b7d90;--bg:#f4f8fc;--card:#fff;--line:#dde8f2;
+  --ink:#1B3A55;--muted:#6b7d90;--bg:#f4f8fc;--card:#ffffff;--line:#dde8f2;
   --soft-blue:#eaf2fb;--good:#008D8F;--warn:#F6E069;--risk:#CD1926;
+  --field-bg:#ffffff;--field-border:#cfdde8;--scale-bg:#fbfdfe;--scale-border:#d6e3ec;
+  --scale-text:#536b7e;--progress-track:#e8f0f5;--chip-bg:#f0f6fa;--priority-bg:#fffaf4;
+  --loading-overlay:rgba(255,255,255,.85);--loading-box:#ffffff;--header-bg:#ffffff;
+  --shadow:0 8px 30px rgba(20,70,100,.05);--menu-shadow:0 16px 40px rgba(20,70,100,.16);
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --blue:#91d0ee;--blue-dark:#b1e1f3;--navy:#f1f7fa;--teal:#65e0e7;--orange:#ff9a72;
+  --ink:#f1f7fa;--muted:#b7cbd4;--bg:#091a27;--card:#112b3a;--line:#35515e;
+  --soft-blue:#183b4c;--good:#4ed9b6;--warn:#ffd466;--risk:#ff8282;
+  --field-bg:#0d2331;--field-border:#35515e;--scale-bg:#163548;--scale-border:#2a4c60;
+  --scale-text:#c3d8e2;--progress-track:#1c3b4e;--chip-bg:#1b3d52;--priority-bg:#2d261e;
+  --loading-overlay:rgba(9,26,39,.88);--loading-box:#112b3a;--header-bg:#112b3a;
+  --shadow:0 8px 30px rgba(0,0,0,.35);--menu-shadow:0 16px 40px rgba(0,0,0,.45);
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
@@ -17,7 +35,7 @@ button,input,select{font:inherit}
 .hidden{display:none!important}
 
 /* ============ HEADER ============ */
-.top{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+.top{background:var(--header-bg);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;transition:background-color .2s,border-color .2s}
 .nav{
   max-width:1100px;
   margin:0 auto;
@@ -28,7 +46,10 @@ button,input,select{font:inherit}
 }
 .logo{height:54px;max-width:190px;object-fit:contain}
 
-.contactWrap{position:relative;margin-left:auto}
+.nav-actions{display:flex;align-items:center;gap:12px;margin-left:auto}
+.theme-toggle{padding:8px 14px;border:1px solid var(--line);border-radius:99px;background:var(--card);color:var(--ink);font-size:12.5px;font-weight:600;cursor:pointer;transition:.2s ease;white-space:nowrap}
+.theme-toggle:hover{border-color:var(--blue);background:var(--soft-blue);color:var(--blue)}
+.contactWrap{position:relative}
 
 .contactBtn{
   display:flex;
@@ -66,10 +87,10 @@ button,input,select{font:inherit}
   position:absolute;
   right:0;
   top:calc(100% + 10px);
-  background:#fff;
+  background:var(--card);
   border:1px solid var(--line);
   border-radius:14px;
-  box-shadow:0 16px 40px rgba(20,70,100,.16);
+  box-shadow:var(--menu-shadow);
   padding:10px;
   min-width:240px;
   z-index:30;
@@ -122,16 +143,16 @@ button,input,select{font:inherit}
 .hero h1{font-size:38px;margin:10px 0 8px;color:var(--navy);letter-spacing:-.5px}
 .hero p{max-width:680px;margin:0 auto;color:var(--muted);line-height:1.6}
 .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:24px;
-  box-shadow:0 8px 30px rgba(20,70,100,.05);margin-bottom:18px}
+  box-shadow:var(--shadow);margin-bottom:18px;transition:background-color .2s,border-color .2s}
 
 /* form */
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
 .field label{display:block;font-size:13px;font-weight:700;margin-bottom:7px}
-.field input,.field select{width:100%;box-sizing:border-box;padding:12px 13px;border:1px solid #cfdde8;border-radius:10px;
-  outline:0;background:#fff;color:var(--ink);transition:.2s}
+.field input,.field select{width:100%;box-sizing:border-box;padding:12px 13px;border:1px solid var(--field-border);border-radius:10px;
+  outline:0;background:var(--field-bg);color:var(--ink);transition:.2s}
 .field input:focus,.field select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(60,116,185,.1)}
 .notice{background:var(--soft-blue);border:1px solid var(--line);padding:13px 15px;border-radius:10px;
-  font-size:13px;color:#355b76;line-height:1.5;margin-top:16px}
+  font-size:13px;color:var(--ink);line-height:1.5;margin-top:16px}
 
 /* buttons */
 .btn{border:0;background:var(--blue);color:#fff;padding:12px 19px;border-radius:11px;
@@ -143,7 +164,7 @@ button,input,select{font:inherit}
 .actions{display:flex;justify-content:space-between;gap:10px;margin-top:20px}
 
 /* progress */
-.progress{height:8px;background:#e8f0f5;border-radius:99px;overflow:hidden;margin-bottom:20px}
+.progress{height:8px;background:var(--progress-track);border-radius:99px;overflow:hidden;margin-bottom:20px}
 .progress>i,.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--teal))}
 .progress>i{width:0;transition:width .3s ease}
 
@@ -151,14 +172,14 @@ button,input,select{font:inherit}
 .sectionhead{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
 .sectionhead h2{margin:0;font-size:22px;color:var(--navy)}
 .counter{color:var(--muted);font-size:13px;white-space:nowrap}
-.q{padding:18px 0;border-bottom:1px solid #edf2f6}
+.q{padding:18px 0;border-bottom:1px solid var(--line)}
 .q:last-child{border-bottom:0}
 .q p{margin:0 0 12px;font-weight:650;line-height:1.5}
 .scale{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
 .scale label{cursor:pointer}
 .scale input{display:none}
-.scale span{display:block;text-align:center;border:1px solid #d6e3ec;padding:11px 5px;border-radius:9px;
-  color:#536b7e;background:#fbfdfe;transition:.2s}
+.scale span{display:block;text-align:center;border:1px solid var(--scale-border);padding:11px 5px;border-radius:9px;
+  color:var(--scale-text);background:var(--scale-bg);transition:.2s}
 .scale span:hover{border-color:var(--blue);color:var(--blue)}
 .scale input:checked+span{background:var(--soft-blue);border-color:var(--blue);color:var(--blue);
   font-weight:800;box-shadow:0 2px 8px rgba(60,116,185,.08)}
@@ -167,32 +188,32 @@ button,input,select{font:inherit}
 .resultTop{display:grid;grid-template-columns:220px 1fr;gap:24px;align-items:center}
 .score{width:190px;height:190px;border-radius:50%;display:grid;place-items:center;
   background:conic-gradient(var(--blue) 0deg,#e8f0f5 0deg);position:relative;margin:auto}
-.score:after{content:"";position:absolute;width:142px;height:142px;background:#fff;border-radius:50%}
+.score:after{content:"";position:absolute;width:142px;height:142px;background:var(--card);border-radius:50%}
 .score strong,.score small{position:relative;z-index:1}
 .score strong{font-size:42px;color:var(--navy)}
 .score small{font-size:12px;color:var(--muted)}
 .status{font-size:22px;font-weight:800;color:var(--navy);margin-bottom:8px}
 .chips{display:flex;gap:8px;flex-wrap:wrap}
-.chip{padding:7px 10px;border-radius:99px;background:#f0f6fa;font-size:12px;color:var(--navy)}
+.chip{padding:7px 10px;border-radius:99px;background:var(--chip-bg);font-size:12px;color:var(--ink);border:1px solid var(--line)}
 .bars{display:grid;gap:13px}
 .barrow{display:grid;grid-template-columns:180px 1fr 55px;gap:10px;align-items:center;font-size:13px}
-.bar{height:10px;background:#edf3f7;border-radius:99px;overflow:hidden}
+.bar{height:10px;background:var(--progress-track);border-radius:99px;overflow:hidden}
 .bar i{border-radius:99px}
-.priority{border-left:4px solid var(--orange);background:#fffaf4;padding:13px 15px;border-radius:10px;margin:9px 0}
+.priority{border-left:4px solid var(--orange);background:var(--priority-bg);padding:13px 15px;border-radius:10px;margin:9px 0}
 .action90{padding:13px 0;border-bottom:1px solid var(--line)}
 .action90:last-child{border-bottom:0}
 .mini{font-size:12px;color:var(--muted);line-height:1.5}
 
 /* loading + toast */
-.loading{display:none;position:fixed;inset:0;background:rgba(255,255,255,.82);z-index:100;
+.loading{display:none;position:fixed;inset:0;background:var(--loading-overlay);z-index:100;
   align-items:center;justify-content:center;backdrop-filter:blur(3px)}
-.loadingBox{background:#fff;border:1px solid var(--line);border-radius:16px;padding:25px 30px;
-  text-align:center;box-shadow:0 15px 50px rgba(0,0,0,.12)}
-.spinner{padding:15px;border:4px solid #e6eef4;border-top-color:var(--blue);
+.loadingBox{background:var(--loading-box);border:1px solid var(--line);border-radius:16px;padding:25px 30px;
+  text-align:center;box-shadow:var(--menu-shadow)}
+.spinner{padding:15px;border:4px solid var(--line);border-top-color:var(--blue);
   border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 13px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.toast{position:fixed;right:18px;bottom:18px;background:var(--navy);color:#fff;padding:12px 16px;
-  border-radius:10px;display:none;z-index:110}
+.toast{position:fixed;right:18px;bottom:18px;background:var(--card);color:var(--ink);border:1px solid var(--line);padding:12px 16px;
+  border-radius:10px;display:none;z-index:110;box-shadow:var(--menu-shadow)}
 .footer{text-align:center;color:var(--muted);font-size:12px;padding:25px}
 
 @media print{
@@ -235,9 +256,11 @@ button,input,select{font:inherit}
 
 <header class="top">
   <div class="nav">
-    <img class="logo" src="Right head Logo.png" alt="RightHead Logo">
+    <a href="/" style="display:inline-flex;align-items:center;text-decoration:none"><img class="logo" src="Right head Logo.png" alt="RightHead Logo"></a>
 
-    <div class="contactWrap">
+    <div class="nav-actions">
+      <button class="theme-toggle" type="button" data-theme-toggle>Dark mode</button>
+      <div class="contactWrap">
       <button class="contactBtn" id="contactBtn" type="button">
         Contact Us
       </button>
@@ -256,6 +279,7 @@ button,input,select{font:inherit}
           <span class="contactIcon">in</span> LinkedIn
         </a>
       </div>
+    </div>
     </div>
   </div>
 </header>
@@ -629,7 +653,7 @@ function showResult(r, recs){
   $("summary").textContent = getSummary(r.overall);
 
   const deg = r.overall * 3.6;
-  $("scoreRing").style.background = `conic-gradient(var(--blue) ${deg}deg,#e8f0f5 ${deg}deg)`;
+  $("scoreRing").style.background = `conic-gradient(var(--blue) ${deg}deg,var(--progress-track) ${deg}deg)`;
 
   $("chips").innerHTML = `
     <span class="chip">${esc(r.company)}</span>

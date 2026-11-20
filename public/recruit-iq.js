@@ -104,7 +104,7 @@ function renderCandidates() {
       (!skill || `${skills} ${(profile.skills || []).join(' ')}`.toLowerCase().includes(skill)) &&
       score >= minimum && score <= maximum && (!status || candidate.status === status);
   });
-  $('#candidateList').innerHTML = rows.length ? `<table class="riq-table"><thead><tr><th>Candidate</th><th>Experience / location</th><th>Skills</th><th>Best match</th><th>Recruiter status</th><th>Actions</th></tr></thead><tbody>${rows.map(({ candidate, profile, loc, skills, best }) => `<tr><td><strong>${escapeHtml(candidate.name)}</strong><span class="candidate-email">${escapeHtml(candidate.email || 'Not Mentioned')} · ${escapeHtml(candidate.phone || 'Not Mentioned')}</span></td><td>${escapeHtml(profile.totalExperience || 'Not Mentioned')}<span class="candidate-email">${escapeHtml(loc)}</span></td><td>${escapeHtml(skills)}</td><td>${best ? `${best.total}% · ${escapeHtml(best.category)}${best.mandatoryMet ? '' : ' · Mandatory gap'}` : 'Not matched'}</td><td><select class="riq-status" data-status-id="${escapeHtml(candidate.id)}">${statusOptions(candidate.status)}</select></td><td><button class="action-button" type="button" data-profile-candidate="${escapeHtml(candidate.id)}">Profile</button><button class="action-button" type="button" data-edit-candidate="${escapeHtml(candidate.id)}">Notes / history</button><button class="action-button" type="button" data-export-candidate="${escapeHtml(candidate.id)}">Export</button><div class="riq-inline"><select class="riq-status" aria-label="Select job for ${escapeHtml(candidate.name)}" data-rematch-job="${escapeHtml(candidate.id)}">${state.jobs.filter(job => job.status === 'Active').map(job => `<option value="${escapeHtml(job.id)}">${escapeHtml(job.title)}</option>`).join('') || '<option value="">No active jobs</option>'}</select><button class="action-button" type="button" data-rematch-candidate="${escapeHtml(candidate.id)}" ${candidate.hasCv && state.jobs.some(job => job.status === 'Active') ? '' : 'disabled'}>Match to job</button></div></td></tr>`).join('')}</tbody></table>` : '<p class="riq-empty">No candidate records match these filters.</p>';
+  $('#candidateList').innerHTML = rows.length ? `<table class="riq-table"><thead><tr><th>Candidate</th><th>Experience / location</th><th>Skills</th><th>Best match</th><th>Recruiter status</th><th>Actions</th></tr></thead><tbody>${rows.map(({ candidate, profile, loc, skills, best }) => `<tr><td><strong>${escapeHtml(candidate.name)}</strong><span class="candidate-email">${escapeHtml(candidate.email || 'Not Mentioned')} · ${escapeHtml(candidate.phone || 'Not Mentioned')}</span></td><td>${escapeHtml(profile.totalExperience || 'Not Mentioned')}<span class="candidate-email">${escapeHtml(loc)}</span></td><td>${escapeHtml(skills)}</td><td>${best ? `${best.total}% · ${escapeHtml(best.category)}${best.mandatoryMet ? '' : ' · Mandatory gap'}` : 'Not matched'}</td><td><select class="riq-status" data-status-id="${escapeHtml(candidate.id)}">${statusOptions(candidate.status)}</select></td><td><button class="action-button" type="button" data-profile-candidate="${escapeHtml(candidate.id)}">Profile</button><button class="action-button" type="button" data-edit-candidate="${escapeHtml(candidate.id)}">Notes / history</button><button class="action-button" type="button" data-export-candidate="${escapeHtml(candidate.id)}">Export</button><button class="action-button primary-match-btn" type="button" data-open-match="${escapeHtml(candidate.id)}" style="background:var(--brand-soft);color:var(--brand);border-color:var(--brand);font-weight:700">⚡ AI Match</button><div class="riq-inline" style="margin-top:4px"><select class="riq-status" aria-label="Select job for ${escapeHtml(candidate.name)}" data-rematch-job="${escapeHtml(candidate.id)}">${state.jobs.filter(job => job.status === 'Active').map(job => `<option value="${escapeHtml(job.id)}">${escapeHtml(job.title)}</option>`).join('') || '<option value="">No active jobs</option>'}</select><button class="action-button" type="button" data-rematch-candidate="${escapeHtml(candidate.id)}" ${state.jobs.some(job => job.status === 'Active') ? '' : 'disabled'}>Quick match</button></div></td></tr>`).join('')}</tbody></table>` : '<p class="riq-empty">No candidate records match these filters.</p>';
 }
 function statusOptions(selected) { return STATUSES.map(status => `<option ${status === selected ? 'selected' : ''}>${escapeHtml(status)}</option>`).join(''); }
 function renderMatches() {
@@ -229,6 +229,29 @@ function printReport() {
   report.document.write(`<!doctype html><html><head><title>RecruitIQ screening report</title><style>body{font:12px Arial,sans-serif;color:#172d3c;padding:24px}h1{font-size:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ccd7de;padding:8px;text-align:left;vertical-align:top}th{background:#eef4f7}small{color:#60717a}@media print{body{padding:0}}</style></head><body><h1>RecruitIQ screening report</h1><p>${candidateId ? escapeHtml(candidateFor(candidateId)?.name || 'Selected candidate') : jobId ? escapeHtml(jobFor(jobId)?.title || 'Selected job') : 'All job openings'} · Generated ${escapeHtml(new Date().toLocaleString())}</p><table><thead><tr><th>Candidate contact</th><th>Job</th><th>Match</th><th>Matched skills</th><th>Missing skills</th><th>Experience / recommendation</th></tr></thead><tbody>${rows || '<tr><td colspan="6">No saved match reports.</td></tr>'}</tbody></table><script>window.onload=()=>window.print();<` + `/script></body></html>`);
   report.document.close();
 }
+async function openMatchModal(candidateId) {
+  const candidate = candidateFor(candidateId);
+  if (!candidate) return;
+  const activeJobs = state.jobs.filter(j => j.status === 'Active');
+  if (!activeJobs.length) {
+    alert('There are no active job openings available. Create an active job first.');
+    return;
+  }
+  $('#matchCandidateId').value = candidateId;
+  $('#matchDialogTitle').textContent = `AI Match · ${candidate.name}`;
+  $('#matchDialogSubtitle').textContent = `Match ${candidate.name} against an active job opening to evaluate ATS score, required skills, and mandatory criteria.`;
+  $('#matchSelectJob').innerHTML = activeJobs.map(j => `<option value="${escapeHtml(j.id)}">${escapeHtml(j.title)}</option>`).join('');
+  $('#matchCandidateMessage').textContent = '';
+  $('#matchCandidateCv').value = '';
+  try {
+    const detail = await api(`/candidates/${encodeURIComponent(candidateId)}`);
+    if (detail?.cvText) {
+      $('#matchCandidateCv').value = detail.cvText;
+    }
+  } catch (_) {}
+  $('#matchCandidateDialog').showModal();
+}
+
 function init() {
   fillWeights();
   $('#candidateStatusFilter').innerHTML = `<option value="">All statuses</option>${STATUSES.map(status => `<option>${escapeHtml(status)}</option>`).join('')}`;
@@ -318,16 +341,24 @@ function init() {
     catch (error) { alert(error.message); await refresh(); }
   });
   $('#candidateList').addEventListener('click', event => {
-    const edit = event.target.closest('[data-edit-candidate]'), profile = event.target.closest('[data-profile-candidate]'), exportCandidate = event.target.closest('[data-export-candidate]'), rematch = event.target.closest('[data-rematch-candidate]');
+    const edit = event.target.closest('[data-edit-candidate]'), profile = event.target.closest('[data-profile-candidate]'), exportCandidate = event.target.closest('[data-export-candidate]'), rematch = event.target.closest('[data-rematch-candidate]'), openMatch = event.target.closest('[data-open-match]');
+    if (openMatch) openMatchModal(openMatch.dataset.openMatch);
     if (edit) openCandidateDialog(edit.dataset.editCandidate);
     if (profile) showCandidateProfile(profile.dataset.profileCandidate);
     if (exportCandidate) location.href = `/api/recruit-iq/export.xlsx?candidateId=${encodeURIComponent(exportCandidate.dataset.exportCandidate)}`;
     if (rematch) {
       const jobId = rematch.closest('tr').querySelector('[data-rematch-job]').value;
+      if (!jobId) return alert('Select an active job opening.');
       rematch.disabled = true;
       api(`/jobs/${encodeURIComponent(jobId)}/match/${encodeURIComponent(rematch.dataset.rematchCandidate)}`, { method: 'POST', body: '{}' })
         .then(async () => { await refresh(); choosePage('matches'); $('#matchJobFilter').value = jobId; renderMatches(); })
-        .catch(error => alert(error.message))
+        .catch(error => {
+          if (error.message.includes('CV text')) {
+            openMatchModal(rematch.dataset.rematchCandidate);
+          } else {
+            alert(error.message);
+          }
+        })
         .finally(() => { rematch.disabled = false; });
     }
   });
@@ -335,10 +366,39 @@ function init() {
   $('#addCandidateForm').addEventListener('submit', async event => {
     event.preventDefault(); const button = event.submitter; button.disabled = true;
     try {
-      await api('/candidates', { method: 'POST', body: JSON.stringify({ name: $('#newName').value, email: $('#newEmail').value, phone: $('#newPhone').value, recruiter: $('#newRecruiter').value }) });
+      await api('/candidates', { method: 'POST', body: JSON.stringify({
+        name: $('#newName').value, email: $('#newEmail').value, phone: $('#newPhone').value,
+        recruiter: $('#newRecruiter').value, cvText: $('#newCvText') ? $('#newCvText').value : ''
+      }) });
       $('#addCandidateDialog').close(); event.target.reset(); await refresh();
     } catch (error) { $('#addCandidateMessage').textContent = error.message; }
     finally { button.disabled = false; }
+  });
+  $('#matchCandidateForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = $('#runMatchButton');
+    const msg = $('#matchCandidateMessage');
+    const candidateId = $('#matchCandidateId').value;
+    const jobId = $('#matchSelectJob').value;
+    const cvText = $('#matchCandidateCv').value.trim();
+    if (!jobId) { msg.textContent = 'Please select a job opening.'; return; }
+    button.disabled = true;
+    msg.textContent = 'Analyzing and running AI match assessment…';
+    try {
+      await api(`/jobs/${encodeURIComponent(jobId)}/match/${encodeURIComponent(candidateId)}`, {
+        method: 'POST',
+        body: JSON.stringify({ cvText })
+      });
+      $('#matchCandidateDialog').close();
+      await refresh();
+      choosePage('matches');
+      $('#matchJobFilter').value = jobId;
+      renderMatches();
+    } catch (error) {
+      msg.textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
   });
   $('#candidateForm').addEventListener('submit', async event => {
     event.preventDefault(); const button = event.submitter; button.disabled = true;
