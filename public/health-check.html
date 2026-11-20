@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RightHead HR Health Check</title>
+<style>
+:root{
+  --blue:#3C74B9;--blue-dark:#2C5A93;--navy:#004D75;--teal:#55C9D0;--orange:#FC8C37;
+  --ink:#1B3A55;--muted:#6b7d90;--bg:#f4f8fc;--card:#fff;--line:#dde8f2;
+  --soft-blue:#eaf2fb;--good:#008D8F;--warn:#F6E069;--risk:#CD1926;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:Inter,Arial,Helvetica,sans-serif;background:var(--bg);color:var(--ink)}
+button,input,select{font:inherit}
+.hidden{display:none!important}
+
+/* ============ HEADER ============ */
+.top{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+.nav{
+  max-width:1100px;
+  margin:0 auto;
+  padding:12px 18px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+}
+.logo{height:54px;max-width:190px;object-fit:contain}
+
+.contactWrap{position:relative;margin-left:auto}
+
+.contactBtn{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  border:none;
+  background:linear-gradient(135deg,var(--blue),var(--navy));
+  color:#fff;
+  padding:11px 20px;
+  border-radius:99px;
+  font-weight:700;
+  font-size:13.5px;
+  letter-spacing:.2px;
+  cursor:pointer;
+  box-shadow:0 4px 14px rgba(0,77,117,.22);
+  transition:.2s ease;
+}
+.contactBtn:hover{
+  transform:translateY(-1px);
+  box-shadow:0 6px 18px rgba(0,77,117,.3);
+}
+.contactBtn:active{transform:translateY(0)}
+
+.contactBtn .btnIcon{
+  width:18px;
+  height:18px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-size:13px;
+}
+
+.contactMenu{
+  display:none;
+  position:absolute;
+  right:0;
+  top:calc(100% + 10px);
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:14px;
+  box-shadow:0 16px 40px rgba(20,70,100,.16);
+  padding:10px;
+  min-width:240px;
+  z-index:30;
+}
+.contactMenu.open{
+  display:block;
+  animation:fadeSlide .16s ease;
+}
+@keyframes fadeSlide{
+  from{opacity:0;transform:translateY(-4px)}
+  to{opacity:1;transform:translateY(0)}
+}
+
+.contactItem{
+  display:flex;
+  align-items:center;
+  gap:11px;
+  padding:10px 12px;
+  border-radius:9px;
+  color:var(--ink);
+  text-decoration:none;
+  font-size:13.5px;
+  font-weight:600;
+  transition:.15s;
+  white-space:nowrap;
+}
+.contactItem:hover{background:var(--soft-blue);color:var(--blue)}
+
+.contactIcon{
+  width:26px;
+  height:26px;
+  border-radius:50%;
+  background:var(--soft-blue);
+  color:var(--blue);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:12.5px;
+  flex-shrink:0;
+}
+
+@media(max-width:420px){
+  .contactBtn{padding:9px 14px;font-size:12.5px}
+  .contactMenu{min-width:210px}
+}
+
+/* layout */
+.wrap{max-width:1100px;margin:0 auto;padding:34px 18px 60px}
+.hero{text-align:center;padding:28px 10px 18px}
+.hero h1{font-size:38px;margin:10px 0 8px;color:var(--navy);letter-spacing:-.5px}
+.hero p{max-width:680px;margin:0 auto;color:var(--muted);line-height:1.6}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:24px;
+  box-shadow:0 8px 30px rgba(20,70,100,.05);margin-bottom:18px}
+
+/* form */
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.field label{display:block;font-size:13px;font-weight:700;margin-bottom:7px}
+.field input,.field select{width:100%;box-sizing:border-box;padding:12px 13px;border:1px solid #cfdde8;border-radius:10px;
+  outline:0;background:#fff;color:var(--ink);transition:.2s}
+.field input:focus,.field select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(60,116,185,.1)}
+.notice{background:var(--soft-blue);border:1px solid var(--line);padding:13px 15px;border-radius:10px;
+  font-size:13px;color:#355b76;line-height:1.5;margin-top:16px}
+
+/* buttons */
+.btn{border:0;background:var(--blue);color:#fff;padding:12px 19px;border-radius:11px;
+  font-weight:700;cursor:pointer;transition:.2s}
+.btn:hover{background:var(--blue-dark);transform:translateY(-1px)}
+.btn:disabled{opacity:.6;cursor:not-allowed;transform:none}
+.btn.secondary{background:var(--soft-blue);color:var(--blue)}
+.btn.secondary:hover{background:#ddeaf8}
+.actions{display:flex;justify-content:space-between;gap:10px;margin-top:20px}
+
+/* progress */
+.progress{height:8px;background:#e8f0f5;border-radius:99px;overflow:hidden;margin-bottom:20px}
+.progress>i,.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--teal))}
+.progress>i{width:0;transition:width .3s ease}
+
+/* questions */
+.sectionhead{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
+.sectionhead h2{margin:0;font-size:22px;color:var(--navy)}
+.counter{color:var(--muted);font-size:13px;white-space:nowrap}
+.q{padding:18px 0;border-bottom:1px solid #edf2f6}
+.q:last-child{border-bottom:0}
+.q p{margin:0 0 12px;font-weight:650;line-height:1.5}
+.scale{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.scale label{cursor:pointer}
+.scale input{display:none}
+.scale span{display:block;text-align:center;border:1px solid #d6e3ec;padding:11px 5px;border-radius:9px;
+  color:#536b7e;background:#fbfdfe;transition:.2s}
+.scale span:hover{border-color:var(--blue);color:var(--blue)}
+.scale input:checked+span{background:var(--soft-blue);border-color:var(--blue);color:var(--blue);
+  font-weight:800;box-shadow:0 2px 8px rgba(60,116,185,.08)}
+
+/* results */
+.resultTop{display:grid;grid-template-columns:220px 1fr;gap:24px;align-items:center}
+.score{width:190px;height:190px;border-radius:50%;display:grid;place-items:center;
+  background:conic-gradient(var(--blue) 0deg,#e8f0f5 0deg);position:relative;margin:auto}
+.score:after{content:"";position:absolute;width:142px;height:142px;background:#fff;border-radius:50%}
+.score strong,.score small{position:relative;z-index:1}
+.score strong{font-size:42px;color:var(--navy)}
+.score small{font-size:12px;color:var(--muted)}
+.status{font-size:22px;font-weight:800;color:var(--navy);margin-bottom:8px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{padding:7px 10px;border-radius:99px;background:#f0f6fa;font-size:12px;color:var(--navy)}
+.bars{display:grid;gap:13px}
+.barrow{display:grid;grid-template-columns:180px 1fr 55px;gap:10px;align-items:center;font-size:13px}
+.bar{height:10px;background:#edf3f7;border-radius:99px;overflow:hidden}
+.bar i{border-radius:99px}
+.priority{border-left:4px solid var(--orange);background:#fffaf4;padding:13px 15px;border-radius:10px;margin:9px 0}
+.action90{padding:13px 0;border-bottom:1px solid var(--line)}
+.action90:last-child{border-bottom:0}
+.mini{font-size:12px;color:var(--muted);line-height:1.5}
+
+/* loading + toast */
+.loading{display:none;position:fixed;inset:0;background:rgba(255,255,255,.82);z-index:100;
+  align-items:center;justify-content:center;backdrop-filter:blur(3px)}
+.loadingBox{background:#fff;border:1px solid var(--line);border-radius:16px;padding:25px 30px;
+  text-align:center;box-shadow:0 15px 50px rgba(0,0,0,.12)}
+.spinner{padding:15px;border:4px solid #e6eef4;border-top-color:var(--blue);
+  border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 13px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.toast{position:fixed;right:18px;bottom:18px;background:var(--navy);color:#fff;padding:12px 16px;
+  border-radius:10px;display:none;z-index:110}
+.footer{text-align:center;color:var(--muted);font-size:12px;padding:25px}
+
+@media print{
+  .top{position:static}
+  .actions,.footer{display:none!important}
+  .card{box-shadow:none;break-inside:avoid}
+  body{background:#fff}
+}
+
+/* tablet */
+@media(max-width:900px){
+  .grid{grid-template-columns:1fr}
+  .resultTop{grid-template-columns:1fr}
+  .score{margin:0 auto 10px}
+}
+
+/* mobile */
+@media(max-width:700px){
+  .wrap{padding:20px 12px 40px}
+  .hero h1{font-size:29px}
+  .card{padding:18px;border-radius:14px}
+  .barrow{grid-template-columns:105px 1fr 45px}
+  .nav{padding:9px 12px}
+  .logo{height:46px;max-width:155px}
+  .scale span{padding:9px 2px;font-size:12px}
+  .sectionhead{align-items:flex-start;flex-direction:column}
+  .actions{flex-direction:column-reverse}
+  .actions .btn{width:100%}
+}
+
+/* very small phones */
+@media(max-width:380px){
+  .scale{gap:5px}
+  .scale span{padding:8px 0;font-size:11px}
+  .barrow{grid-template-columns:90px 1fr 40px;font-size:12px}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="nav">
+    <img class="logo" src="Right head Logo.png" alt="RightHead Logo">
+
+    <div class="contactWrap">
+      <button class="contactBtn" id="contactBtn" type="button">
+        Contact Us
+      </button>
+
+      <div class="contactMenu" id="contactMenu">
+        <a href="mailto:contact@righthead.in" class="contactItem">
+          <span class="contactIcon">✉</span> contact@righthead.in
+        </a>
+        <a href="tel:+919650339125" class="contactItem">
+          <span class="contactIcon">☎</span> +91 96503 39125
+        </a>
+        <a href="https://rightheadindia.in/" target="_blank" rel="noopener" class="contactItem">
+          <span class="contactIcon">🌐</span> rightheadindia.in
+        </a>
+        <a href="https://linkedin.com/company/righthead/" target="_blank" rel="noopener" class="contactItem">
+          <span class="contactIcon">in</span> LinkedIn
+        </a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- HOME -->
+<section id="home">
+  <div class="hero">
+    <h1>Right Head HR Health Check</h1>
+    <p>A quick, practical assessment to understand the strength and maturity of your HR function — completed in about 5–7 minutes.</p>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div class="field"><label>Company Name *</label><input id="company" required></div>
+      <div class="field"><label>Contact Person *</label><input id="contact" required></div>
+      <div class="field"><label>Official Email *</label><input id="email" type="email" required></div>
+      <div class="field"><label>Phone</label><input id="phone"></div>
+      <div class="field"><label>Industry *</label><input id="industry" required></div>
+      <div class="field">
+        <label>Employees *</label>
+        <select id="employees">
+          <option value="">Select</option>
+          <option>1–50</option>
+          <option>51–200</option>
+          <option>201–500</option>
+          <option>501–1000</option>
+          <option>1001+</option>
+        </select>
+      </div>
+      <div class="field"><label>Locations</label><input id="locations"></div>
+      <div class="field"><label>HR Team Size</label><input id="hrteam" type="number" min="0"></div>
+    </div>
+
+    <div class="notice">Your answers are used to calculate the assessment score and generate the HR Health report.</div>
+
+    <div class="actions">
+      <span></span>
+      <button class="btn" id="btnStart">Start Assessment →</button>
+    </div>
+  </div>
+</section>
+
+<!-- ASSESSMENT -->
+<section id="assessment" class="hidden">
+  <div class="card">
+    <div class="sectionhead">
+      <h2 id="sectionTitle"></h2>
+      <div class="counter" id="counter"></div>
+    </div>
+
+    <div class="progress"><i id="prog"></i></div>
+
+    <div id="questions"></div>
+
+    <div class="actions">
+      <button class="btn secondary" id="btnPrev">← Previous</button>
+      <button class="btn" id="btnNext">Continue →</button>
+    </div>
+  </div>
+</section>
+
+<!-- RESULTS -->
+<section id="results" class="hidden">
+  <div class="card">
+    <div class="resultTop">
+      <div class="score" id="scoreRing">
+        <div style="text-align:center">
+          <strong id="overall"></strong><br>
+          <small>HR HEALTH</small>
+        </div>
+      </div>
+      <div>
+        <div class="mini">RIGHTHEAD HR HEALTH CHECK</div>
+        <div class="status" id="status"></div>
+        <p id="summary"></p>
+        <div class="chips" id="chips"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>HR Health by Area</h2>
+    <div class="bars" id="bars"></div>
+  </div>
+
+  <div class="card">
+    <h2>Priority Areas</h2>
+    <p class="mini">Lower-scoring areas are surfaced first for practical follow-up.</p>
+    <div id="priorities"></div>
+  </div>
+
+  <div class="card">
+    <h2>Suggested 90-Day Focus</h2>
+    <div id="actions90"></div>
+  </div>
+
+  <div class="actions">
+    <button class="btn secondary" id="btnPrint">Print / Save PDF</button>
+    <button class="btn" id="btnRestart">Start New Assessment</button>
+  </div>
+</section>
+
+</main>
+
+<div class="footer">RightHead • HR Health Check</div>
+<div class="toast" id="toast"></div>
+
+<div class="loading" id="loading">
+  <div class="loadingBox">
+    <div class="spinner"></div>
+    <strong>Saving your assessment...</strong>
+    <div class="mini" style="margin-top:6px">Please wait.</div>
+  </div>
+</div>
+
+<script>
+/* ============ QUESTIONS (text + code kept together) ============ */
+const SECTIONS = [
+  ["Recruitment & Talent Acquisition", [
+    ["RTA01", "Our recruitment process is structured and consistently followed."],
+    ["RTA02", "Job descriptions and hiring criteria are current and clear."],
+    ["RTA03", "We attract suitable candidates without relying only on urgent hiring."],
+    ["RTA04", "Hiring managers actively participate in selection decisions."]
+  ]],
+  ["Onboarding", [
+    ["ONB01", "New employees follow a consistent onboarding process."],
+    ["ONB02", "New hires understand expectations, values and their role quickly."],
+    ["ONB03", "Managers actively support new employees during their first months."]
+  ]],
+  ["Performance Management", [
+    ["PM01", "Employees have clear goals or KPIs."],
+    ["PM02", "Performance reviews and feedback happen consistently."],
+    ["PM03", "Managers address poor performance and recognise strong performance."],
+    ["PM04", "Individual goals are linked to business priorities."]
+  ]],
+  ["Learning & Development", [
+    ["LD01", "Employees have opportunities or plans for development."],
+    ["LD02", "Managers and leaders receive appropriate development support."],
+    ["LD03", "Training needs and effectiveness are reviewed regularly."]
+  ]],
+  ["Employee Engagement & Culture", [
+    ["EC01", "Employees understand the organisation's vision and values."],
+    ["EC02", "Communication is open and transparent."],
+    ["EC03", "Employees feel recognised and teams collaborate effectively."],
+    ["EC04", "Employee feedback is collected and acted upon."]
+  ]],
+  ["Leadership Capability", [
+    ["LC01", "Managers confidently lead and coach their teams."],
+    ["LC02", "Difficult people conversations are handled effectively."],
+    ["LC03", "Leaders are accountable and leadership expectations are clear."],
+    ["LC04", "Succession planning exists for important roles."]
+  ]],
+  ["HR Policies & Compliance", [
+    ["HC01", "HR policies and contracts are current and maintained."],
+    ["HC02", "Employee records and statutory compliance are consistently managed."],
+    ["HC03", "Disciplinary and workplace investigation processes are documented."],
+    ["HC04", "Managers understand key employment obligations."]
+  ]],
+  ["Compensation & Benefits", [
+    ["CB01", "Pay is broadly competitive for relevant roles."],
+    ["CB02", "Pay and incentive decisions are consistent and linked to business goals."],
+    ["CB03", "Compensation and benefits are reviewed and communicated clearly."]
+  ]],
+  ["HR Systems & Processes", [
+    ["HS01", "Core HR processes are documented."],
+    ["HS02", "HR technology and employee data support the business."],
+    ["HS03", "HR reporting and metrics are readily available."],
+    ["HS04", "Manual HR administration is minimised."]
+  ]],
+  ["Strategic HR", [
+    ["SH01", "HR is involved in business and leadership decisions."],
+    ["SH02", "Workforce and talent planning is proactive."],
+    ["SH03", "Critical talent risks are identified early."],
+    ["SH04", "HR initiatives are measured and support organisational growth."]
+  ]],
+  ["Business Impact Assessment", [
+    ["BIA01", "People issues are not materially preventing business growth."],
+    ["BIA02", "Critical roles are filled within a reasonable timeframe."],
+    ["BIA03", "Employee turnover is understood and actively managed."],
+    ["BIA04", "Managers have enough support to handle people issues effectively."]
+  ]]
+];
+
+const TOTAL_QUESTIONS = SECTIONS.reduce((t, s) => t + s[1].length, 0);
+
+const ACTION_TEXT =
+  "Review current practice, define 2–3 measurable actions, assign an owner and review progress within 30/60/90 days.";
+
+/* ============ STATE ============ */
+let sec = 0;
+let answers = {};
+let submitting = false;
+
+/* ============ HELPERS ============ */
+const $ = id => document.getElementById(id);
+const val = id => $(id).value.trim();
+
+function esc(v){
+  return String(v)
+    .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+}
+
+const show = (id, visible) => $(id).classList.toggle("hidden", !visible);
+const toTop = () => window.scrollTo({ top:0, behavior:"smooth" });
+const showLoading = on => { $("loading").style.display = on ? "flex" : "none"; };
+
+let toastTimer;
+function toast(message){
+  const el = $("toast");
+  el.textContent = message;
+  el.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = "none"; }, 2500);
+}
+
+/* ============ START ============ */
+function start(){
+  const required = ["company","contact","email","industry"];
+  if(required.some(id => !val(id)) || !$("employees").value){
+    alert("Please complete all required company details.");
+    return;
+  }
+
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val("email"))){
+    alert("Please enter a valid official email address.");
+    return;
+  }
+
+  sec = 0;
+  answers = {};
+
+  show("home", false);
+  show("assessment", true);
+  toTop();
+  render();
+}
+
+/* ============ RENDER ============ */
+function render(){
+  const [title, items] = SECTIONS[sec];
+
+  $("sectionTitle").textContent = title;
+  $("counter").textContent = `Section ${sec + 1} of ${SECTIONS.length}`;
+  $("prog").style.width = ((sec + 1) / SECTIONS.length) * 100 + "%";
+
+  $("questions").innerHTML = items.map(([, text], i) => {
+    const key = sec + "-" + i;
+    const scale = [1,2,3,4,5].map(n => `
+      <label>
+        <input type="radio" name="${key}" value="${n}" ${answers[key] == n ? "checked" : ""}>
+        <span>${n}</span>
+      </label>`).join("");
+
+    return `<div class="q"><p>${i + 1}. ${esc(text)}</p><div class="scale">${scale}</div></div>`;
+  }).join("");
+}
+
+/* one delegated listener instead of inline onchange per radio */
+$("questions").addEventListener("change", e => {
+  const input = e.target;
+  if(input.type === "radio") answers[input.name] = Number(input.value);
+});
+
+/* ============ NAVIGATION ============ */
+function next(){
+  const items = SECTIONS[sec][1];
+
+  for(let i = 0; i < items.length; i++){
+    if(!answers[sec + "-" + i]){
+      alert("Please answer all questions in this section.");
+      return;
+    }
+  }
+
+  if(sec < SECTIONS.length - 1){
+    sec++;
+    render();
+    toTop();
+  }else{
+    finish();
+  }
+}
+
+function prev(){
+  if(sec > 0){
+    sec--;
+    render();
+    toTop();
+  }
+}
+
+/* ============ SCORING ============ */
+function calc(){
+  return SECTIONS.map(([, items], s) => {
+    const sum = items.reduce((t, _, i) => t + Number(answers[s + "-" + i] || 0), 0);
+    return Math.round((sum / (items.length * 5)) * 100);
+  });
+}
+
+function getStatus(overall){
+  if(overall >= 80) return "Mature HR Function";
+  if(overall >= 65) return "Strong Foundation";
+  if(overall >= 50) return "Developing HR Function";
+  return "Priority Attention";
+}
+
+function getSummary(overall){
+  if(overall >= 80) return "Your HR practices show strong maturity across the assessment areas. Focus on optimisation, measurement and future workforce readiness.";
+  if(overall >= 65) return "Core HR practices are established, with opportunities to improve consistency, leadership capability and strategic impact.";
+  if(overall >= 50) return "Several HR foundations are in place, but targeted improvements can strengthen employee experience and business support.";
+  return "Several foundational HR areas need attention. Prioritise people processes, leadership and compliance-related risks.";
+}
+
+/* ============ FINISH / DATABASE SAVE ============ */
+async function finish(){
+  if(submitting) return;
+  submitting = true;
+  showLoading(true);
+
+  const scores = calc();
+  const overall = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+  const status = getStatus(overall);
+
+  const recs = scores
+    .map((v, i) => ({ v, i }))
+    .sort((a, b) => a.v - b.v)
+    .slice(0, 3);
+
+  try{
+    const response = await fetch("/api/health-assessments", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+      company: val("company"), contact: val("contact"), email: val("email"), phone: val("phone"),
+      industry: val("industry"), employees: $("employees").value, locations: val("locations"),
+      hrteam: $("hrteam").value, totalQuestions: TOTAL_QUESTIONS, answers, scores, overall, status,
+      summary: getSummary(overall), recommendations: recs.map(x => ({ area: SECTIONS[x.i][0], score: x.v, recommendation: ACTION_TEXT }))
+    })});
+    const saved = await response.json();
+    if(!response.ok) throw new Error(saved.error || "Assessment could not be saved.");
+
+    showResult({
+      id: saved.id, company: val("company"), contact: val("contact"), email: val("email"), phone: val("phone"),
+      industry: val("industry"), employees: $("employees").value, locations: val("locations"), hrteam: $("hrteam").value,
+      scores,
+      overall,
+      status,
+      date: new Date().toISOString()
+    }, recs);
+
+    toast(saved.emailStatus === "sent" ? "Report saved and emailed to Right Head." : saved.emailStatus === "failed" ? "Report saved, but email delivery failed." : "Report saved. Email delivery is not configured yet.");
+
+  }catch(error){
+    console.error("Health assessment save failed:", error);
+    alert(error.message || "Assessment could not be saved. Please try again.");
+  }finally{
+    submitting = false;
+    showLoading(false);
+  }
+}
+
+/* ============ RESULTS ============ */
+function showResult(r, recs){
+  show("assessment", false);
+  show("results", true);
+
+  $("overall").textContent = r.overall + "%";
+  $("status").textContent = r.status;
+  $("summary").textContent = getSummary(r.overall);
+
+  const deg = r.overall * 3.6;
+  $("scoreRing").style.background = `conic-gradient(var(--blue) ${deg}deg,#e8f0f5 ${deg}deg)`;
+
+  $("chips").innerHTML = `
+    <span class="chip">${esc(r.company)}</span>
+    <span class="chip">${esc(r.industry)}</span>
+    <span class="chip">Assessment ID: ${esc(r.id.slice(0, 8))}</span>`;
+
+  $("bars").innerHTML = SECTIONS.map(([title], i) => `
+    <div class="barrow">
+      <span>${esc(title)}</span>
+      <div class="bar"><i style="width:${r.scores[i]}%"></i></div>
+      <b>${r.scores[i]}%</b>
+    </div>`).join("");
+
+  $("priorities").innerHTML = recs.map(x => `
+    <div class="priority">
+      <b>${esc(SECTIONS[x.i][0])}</b>
+      <div class="mini">Current assessment score: <strong>${x.v}%</strong></div>
+    </div>`).join("");
+
+  $("actions90").innerHTML = recs.map((x, j) => `
+    <div class="action90">
+      <b>${j + 1}. ${esc(SECTIONS[x.i][0])}</b>
+      <div class="mini">Review the current practice, define 2–3 measurable actions, assign an owner and review progress within 30 / 60 / 90 days.</div>
+    </div>`).join("");
+
+  toTop();
+}
+
+/* ============ BUTTONS ============ */
+$("btnStart").addEventListener("click", start);
+$("btnPrev").addEventListener("click", prev);
+$("btnNext").addEventListener("click", next);
+$("btnPrint").addEventListener("click", () => window.print());
+$("btnRestart").addEventListener("click", () => location.reload());
+const contactBtn = $("contactBtn");
+const contactMenu = $("contactMenu");
+
+contactBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  contactMenu.classList.toggle("open");
+});
+
+document.addEventListener("click", (e) => {
+  if(!contactMenu.contains(e.target) && e.target !== contactBtn){
+    contactMenu.classList.remove("open");
+  }
+});
+</script>
+
+</body>
+</html>

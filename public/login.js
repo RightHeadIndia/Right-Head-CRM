@@ -1,7 +1,8 @@
 const form = document.getElementById('form'), err = document.getElementById('error'), btn = document.getElementById('go');
 const params = new URLSearchParams(location.search);
-const product = params.get('product') === 'talent' || params.get('next') === '/talent.html' ? 'talent' : 'crm';
-const nextPage = product === 'talent' ? '/talent.html' : '/index.html';
+const requestedNext = params.get('next');
+const product = params.get('product') === 'talent' || requestedNext === '/talent.html' || requestedNext === '/recruit-iq.html' ? 'talent' : 'crm';
+const nextPage = product === 'talent' ? (requestedNext === '/recruit-iq.html' ? '/recruit-iq.html' : '/talent.html') : '/index.html';
 const emailInput = document.getElementById('email');
 document.getElementById('loginTitle').textContent = product === 'talent' ? 'Talent Acquisition' : 'Right Head CRM';
 document.getElementById('loginDescription').textContent = product === 'talent'

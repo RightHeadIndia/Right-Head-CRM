@@ -45,6 +45,7 @@ const SESSION_MS = 12 * 60 * 60 * 1000;
 const COOKIE_NAME = 'crm_session';
 let massMailInProgress = false;
 const activeMailThreads = new Set();
+const healthSubmissionWindows = new Map();
 
 async function acquireMailThreadLock(clientId, email) {
   const key = `${clientId}\n${String(email).toLowerCase()}`;
@@ -137,14 +138,14 @@ function sessionProduct(req) {
   return 'crm';
 }
 function productForPath(pathname) {
-  return ['/talent.html', '/talent.css', '/talent.js'].includes(pathname) ||
+  return ['/talent.html', '/talent.css', '/talent.js', '/recruit-iq.html', '/recruit-iq.js'].includes(pathname) || pathname === '/api/recruit-iq' || pathname.startsWith('/api/recruit-iq/') ||
     pathname === '/api/candidates' || pathname.startsWith('/api/candidates/') ||
     pathname === '/api/ta-weekly' || pathname.startsWith('/api/ta-weekly/') || pathname === '/api/ta-export.xlsx' || pathname === '/api/ta-imports' || pathname.startsWith('/api/ta-imports/') || pathname === '/api/ta-cv-shares' || pathname.startsWith('/api/ta-cv-shares/')
     ? 'talent'
     : 'crm';
 }
-function loginUrl(product) {
-  const next = product === 'talent' ? '/talent.html' : '/index.html';
+function loginUrl(product, pathname = '') {
+  const next = product === 'talent' ? (pathname === '/recruit-iq.html' ? '/recruit-iq.html' : '/talent.html') : '/index.html';
   return `/login.html?product=${product}&next=${encodeURIComponent(next)}`;
 }
 function equalHash(value, expected) {
@@ -213,17 +214,17 @@ app.use((req, res, next) => {
 
   if (req.path === '/') return res.sendFile(path.join(__dirname, 'public', 'portal.html'));
   const isPublic =
-    ['/login.html', '/login.js', '/login.css', '/portal.html', '/portal.css', '/theme.js', '/Right head Logo.png', '/logo.png'].includes(decodedPath) ||
+    ['/login.html', '/login.js', '/login.css', '/portal.html', '/portal.css', '/theme.js', '/health-check.html', '/Right head Logo.png', '/logo.png'].includes(decodedPath) ||
     ['/Right head Logo.png', '/logo.png'].includes(req.path) ||
     /\.(png|jpg|jpeg|svg|ico|webp|gif)$/i.test(decodedPath) ||
     decodedPath.startsWith('/vendor/');
 
-  if (req.path === '/api/webhooks/whatsapp') return next();
+  if (req.path === '/api/webhooks/whatsapp' || req.path === '/api/health-assessments') return next();
   if (isPublic) return next();
   const requiredProduct = productForPath(decodedPath);
   if (sessionProduct(req) === requiredProduct) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: `Sign in to the ${requiredProduct === 'talent' ? 'Talent Acquisition' : 'CRM'} workspace to continue.` });
-  res.redirect(loginUrl(requiredProduct));
+  res.redirect(loginUrl(requiredProduct, decodedPath));
 });
 // The Excel reader is served from node_modules because the Content-Security-Policy above blocks scripts from other sites.
 app.get('/vendor/xlsx.full.min.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules', 'xlsx', 'dist', 'xlsx.full.min.js')));
@@ -235,6 +236,68 @@ const load = () => readDatabase(database);
 const save = db => writeDatabase(database, db);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const now = () => new Date().toISOString();
+
+function safeText(value, max = 300) { return String(value ?? '').trim().slice(0, max); }
+function escapeHtml(value) { return safeText(value, 10000).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char])); }
+
+app.post('/api/health-assessments', asyncRoute(async (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const window = healthSubmissionWindows.get(ip) || { count: 0, until: Date.now() + 60 * 60 * 1000 };
+  if (window.until <= Date.now()) { window.count = 0; window.until = Date.now() + 60 * 60 * 1000; }
+  if (window.count >= 10) return res.status(429).json({ error: 'Too many assessments were submitted from this connection. Please try again later.' });
+
+  const b = req.body || {};
+  const company = safeText(b.company, 200), contact = safeText(b.contact, 200), email = safeText(b.email, 254);
+  const sections = ['Recruitment & Talent Acquisition', 'Onboarding', 'Performance Management', 'Learning & Development', 'Employee Engagement & Culture', 'Leadership Capability', 'HR Policies & Compliance', 'Compensation & Benefits', 'HR Systems & Processes', 'Strategic HR', 'Business Impact Assessment'];
+  const questionCounts = [4, 3, 4, 3, 4, 4, 4, 3, 4, 4, 4];
+  const scores = Array.isArray(b.scores) ? b.scores.map(Number) : [];
+  const answers = b.answers && typeof b.answers === 'object' && !Array.isArray(b.answers) ? b.answers : {};
+  const answerValues = Object.values(answers).map(Number);
+  if (!company || !contact || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || scores.length !== sections.length || scores.some(score => !Number.isInteger(score) || score < 0 || score > 100) || answerValues.length !== 41 || answerValues.some(value => !Number.isInteger(value) || value < 1 || value > 5)) {
+    return res.status(400).json({ error: 'Please complete all assessment questions and provide valid company contact details.' });
+  }
+  const calculatedScores = questionCounts.map((count, sectionIndex) => {
+    const sectionAnswers = Array.from({ length: count }, (_, questionIndex) => Number(answers[`${sectionIndex}-${questionIndex}`]));
+    return sectionAnswers.some(value => value < 1 || value > 5) ? -1 : Math.round(sectionAnswers.reduce((sum, value) => sum + value, 0) / (count * 5) * 100);
+  });
+  if (Object.keys(answers).length !== 41 || calculatedScores.some((score, index) => score !== scores[index])) return res.status(400).json({ error: 'Assessment answers and section scores did not match.' });
+  const overall = Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length);
+  if (Number(b.overall) !== overall) return res.status(400).json({ error: 'Assessment score did not match the submitted answers.' });
+  const status = overall >= 80 ? 'Mature HR Function' : overall >= 65 ? 'Strong Foundation' : overall >= 50 ? 'Developing HR Function' : 'Priority Attention';
+  const summary = overall >= 80 ? 'Your HR practices show strong maturity across the assessment areas. Focus on optimisation, measurement and future workforce readiness.' : overall >= 65 ? 'Core HR practices are established, with opportunities to improve consistency, leadership capability and strategic impact.' : overall >= 50 ? 'Several HR foundations are in place, but targeted improvements can strengthen employee experience and business support.' : 'Several foundational HR areas need attention. Prioritise people processes, leadership and compliance-related risks.';
+  const id = crypto.randomUUID(), createdAt = now();
+  const recommendations = scores.map((score, index) => ({ area: sections[index], score })).sort((a, b) => a.score - b.score).slice(0, 3).map(item => ({ ...item, recommendation: 'Review current practice, define 2–3 measurable actions, assign an owner and review progress within 30/60/90 days.' }));
+  const record = {
+    id, createdAt, company, contact, email, phone: safeText(b.phone, 50), industry: safeText(b.industry, 200),
+    employees: safeText(b.employees, 50), locations: safeText(b.locations, 500), hrTeamSize: safeText(b.hrteam, 20),
+    answers, sections: sections.map((name, index) => ({ name, score: scores[index] })), overall,
+    status, summary, recommendations
+  };
+  const db = load();
+  db.healthAssessments.push(record);
+  save(db);
+  window.count++;
+  healthSubmissionWindows.set(ip, window);
+
+  let emailSent = false, emailStatus = 'not_configured';
+  const smtp = db.settings.smtp || {};
+  const textReport = `HR Health Check — ${company}\nContact: ${contact} <${email}>\nOverall: ${overall}% — ${record.status}\n${record.summary}\n\n${record.sections.map(section => `${section.name}: ${section.score}%`).join('\n')}\n\nPriority areas:\n${recommendations.map(item => `${item.area} (${item.score}%): ${item.recommendation}`).join('\n')}\n\nAssessment ID: ${id}`;
+  const reportRows = record.sections.map(section => `<tr><td style="padding:8px;border-bottom:1px solid #ddd">${escapeHtml(section.name)}</td><td style="padding:8px;border-bottom:1px solid #ddd">${section.score}%</td></tr>`).join('');
+  const report = `<h2>HR Health Check — ${escapeHtml(company)}</h2><p>Contact: ${escapeHtml(contact)} (${escapeHtml(email)})</p><p>Industry: ${escapeHtml(record.industry)} · Employees: ${escapeHtml(record.employees)}</p><p><strong>Overall score: ${overall}% — ${escapeHtml(record.status)}</strong></p><p>${escapeHtml(record.summary)}</p><table style="border-collapse:collapse;width:100%">${reportRows}</table><h3>Priority areas</h3><ol>${recommendations.map(item => `<li>${escapeHtml(item.area)} (${item.score}%): ${escapeHtml(item.recommendation)}</li>`).join('')}</ol><p>Assessment ID: ${id}<br>Submitted: ${createdAt}</p>`;
+  const useGmail = gmailConfigured(), smtpConfigured = Boolean(smtp.host && smtp.user && smtp.pass), resendConfigured = Boolean((process.env.RESEND_API_KEY || '').trim());
+  if (useGmail || smtpConfigured || resendConfigured) {
+    try {
+      const mail = { to: 'contact@righthead.in', replyTo: email, subject: `HR Health Check: ${company} (${overall}%)`, text: textReport, html: report };
+      if (useGmail) await sendWithGmail(mail);
+      else if (smtpConfigured) await buildTransport(smtp).sendMail({ ...mail, from: smtp.from || smtp.user, replyTo: email });
+      else await sendWithResend(mail);
+      emailSent = true;
+      emailStatus = 'sent';
+    } catch (error) { emailStatus = 'failed'; console.error('Health assessment email failed:', error.message); }
+  }
+  res.json({ ok: true, id, emailSent, emailStatus });
+}));
+
 const STAGES = ['new', 'contacted', 'replied', 'onboarded', 'rejected'];
 const CANDIDATE_STAGES = ['Screening', 'Interview', 'Shortlisted', 'Offer', 'Joining', 'Rejected', 'Blacklisted'];
 const LEGACY_CANDIDATE_STAGES = { Unspecified: 'Screening', Applied: 'Screening', Hired: 'Joining' };
@@ -1798,7 +1861,7 @@ function gmailConfigured() {
   );
 }
 
-async function sendWithGmail({ to, subject, text, html, threading = {} }) {
+async function sendWithGmail({ to, subject, text, html, replyTo = '', threading = {} }) {
   const clientId = (process.env.GMAIL_CLIENT_ID || '').trim();
   const clientSecret = (process.env.GMAIL_CLIENT_SECRET || '').trim();
   const refreshToken = (process.env.GMAIL_REFRESH_TOKEN || '').trim();
@@ -1835,6 +1898,7 @@ async function sendWithGmail({ to, subject, text, html, threading = {} }) {
   const rawMessage = [
     `From: ${from}`,
     `To: ${to}`,
+    ...(replyTo ? [`Reply-To: ${replyTo}`] : []),
     `Subject: ${encodedSubject}`,
     `Message-ID: ${messageId}`,
     ...(threading.inReplyTo ? [`In-Reply-To: ${threading.inReplyTo}`] : []),
@@ -1881,7 +1945,7 @@ async function sendWithGmail({ to, subject, text, html, threading = {} }) {
   return { ...sendData, rfcMessageId: messageId };
 }
 
-async function sendWithResend({ to, subject, text, html, threading = {} }) {
+async function sendWithResend({ to, subject, text, html, replyTo = '', threading = {} }) {
   const apiKey = (process.env.RESEND_API_KEY || '').trim();
   const from = (process.env.RESEND_FROM || '').trim() || 'onboarding@resend.dev';
   const sandboxTo = (process.env.RESEND_SANDBOX_REDIRECT_TO || '').trim();
@@ -1910,6 +1974,7 @@ async function sendWithResend({ to, subject, text, html, threading = {} }) {
     body: JSON.stringify({
       from,
       to: finalTo,
+      ...(replyTo ? { reply_to: replyTo } : {}),
       subject: finalSubject,
       text: finalText,
       html: finalHtml,
@@ -2710,7 +2775,15 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
 const ctx = { load, save, uid, now, log, STAGES, CALLS };
 
 require('./lib/tools').mount(app, ctx);
-require('./lib/ai').mount(app, ctx);
+const ai = require('./lib/ai');
+ai.mount(app, ctx);
+require('./lib/recruit-iq').mount(app, {
+  load, save, now,
+  flush: () => flush(database),
+  analyze: ai.analyzeRecruitIQ,
+  extractJob: ai.extractRecruitIQJob,
+  aiContext: ctx
+});
 
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);

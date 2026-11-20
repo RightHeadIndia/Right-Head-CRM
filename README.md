@@ -14,7 +14,7 @@ npm install
 npm start
 ```
 
-Open http://localhost:3000 for the Right Head Management workspace selector. CRM signs in as `contact@righthead.in`; Talent Acquisition signs in as `avvni.sharrma@righthead.in`. HR Health Check opens its external site in the same tab and uses that site's own login.
+Open http://localhost:3000 for the Right Head Management workspace selector. CRM signs in as `contact@righthead.in`; Talent Acquisition signs in as `avvni.sharrma@righthead.in`. HR Health Check is hosted in this app and saves completed reports in the encrypted database.
 
 **Existing encrypted Neon database:** use the exact `CRM_ENCRYPTION_KEY` already associated with that database. Do not run `npm run setup` to generate a replacement key. A different key makes the existing records unreadable. If you need a blank CRM, use a separate Neon database; do not truncate the existing database.
 
@@ -34,7 +34,13 @@ Production requires `DATABASE_URL` and does not fall back to SQLite. Explicit `C
 
 ## Using it
 
-**Management portal.** The home page links to CRM, Talent Acquisition, and the external HR Health Check. CRM keeps its existing sign-in and workflows. Talent Acquisition is an authenticated candidate pipeline with candidate contact details, position, source, notes, search, stage filtering, and the Applied → Screening → Interview → Offer → Hired / Rejected stages. Candidate records use the existing encrypted database.
+**Management portal.** The home page links to CRM, Talent Acquisition, HR Health Check, and RecruitIQ. The public HR Health Check saves scored answers in the encrypted database and emails the section scores and priorities to `contact@righthead.in` using the existing Gmail API, SMTP, or Resend mail configuration. It still saves the report if mail delivery is not configured or fails and shows whether the email was sent. Talent Acquisition and RecruitIQ require the Talent Acquisition sign-in.
+
+**RecruitIQ.** The Talent Acquisition workspace includes RecruitIQ Dashboard, Job Openings, Upload CVs, Candidate Database, AI Matching Results, Shortlisted Candidates, and Reports & Settings. Recruiters can create/edit multiple jobs, upload a JD or paste it, edit extracted requirements and per-job scoring weights, then bulk-upload up to 25 PDF/DOC/DOCX/text CVs (10 MB each, 20 MB total per batch) for an active job. Processing and failure state is saved per file; failed files can be retried. Searchable PDF and Word documents use the installed parsers. For scanned PDFs, install `pdftoppm` and `tesseract` on the server and optionally set `PDFTOPPM_CMD`, `TESSERACT_CMD`, and `OCR_LANG` (default language `eng`); without those executables, scanned files fail with an actionable message.
+
+RecruitIQ AI extraction and matching use the server-side configured provider described under [AI features](#ai-features-groq-by-default). CV profile fields are kept only when supported by text in the CV; mandatory evidence is checked against the CV text. Scores are computed server-side from validated dimension scores and the job's weights. Default weights are Skills 30%, Relevant experience 20%, Industry experience 15%, Role and responsibilities 15%, Education 10%, Tools and certifications 10%; custom weights must total 100%. A missing mandatory requirement is flagged regardless of score. AI recommendations are advisory and never change a candidate's recruiter status.
+
+RecruitIQ candidate profiles, CV text, processing records, job requirements and per-job match reports are stored in the existing encrypted record database, without a new SQL migration. Candidate deduplication uses normalized CV text, email or phone; records with a matching email link to the existing Talent Acquisition candidate without changing its pipeline workflow. One RecruitIQ candidate can have a separate report for every job, and an uploaded CV can be re-matched from the candidate database. Recruiter status, notes, rejection reason, owner and follow-up date are stored with candidate history. Excel export includes screening rankings, candidate records, shortlist and evidence sheets. **Print / Save PDF** opens the browser print dialog for the selected screening report. RecruitIQ shares the app's single Talent Acquisition login and its access control.
 
 **CRM dashboard** and sidebar pages: All Clients, Calling Status, Follow-up Reminders, Replies (blue), Onboarded (green), Red Zone (red), Tasks, Deals Pipeline, Reports, Mass Mailing, Email Templates, AI Assistant, Settings & Import.
 
@@ -85,6 +91,7 @@ Settings & Import > General & AI > select Groq or an OpenAI-compatible provider,
 
 | Where | What it does |
 |---|---|
+| RecruitIQ | Extract job requirements and CV facts; weighted job matching and evidence-backed recommendations |
 | Client > Summarize client | Summary, key points, open items, risk, next step |
 | Client > Draft message | Email / WhatsApp / SMS draft; you edit, then copy, open WhatsApp or send |
 | Client > Analyze reply | Sentiment, intent, next step, suggested reply, one-click Apply (stage + follow-up) |
@@ -94,7 +101,7 @@ Settings & Import > General & AI > select Groq or an OpenAI-compatible provider,
 When you use an AI button, the required client details (name, company, contact info, notes, recent activity and messages) are sent to the selected provider; the assistant can read any client you ask about. Drafts can be wrong: check names, facts and any `[bracketed]` blanks before sending. Client messages are treated as data, not instructions, and the server limits AI calls to 40 per minute. Groq model availability and limits can change; choose a model enabled for your account.
 
 ## Security and backups
-- CRM and Talent Acquisition have separate email/password logins (`CRM_LOGIN_PASSWORD` and `TALENT_LOGIN_PASSWORD`, each at least 12 characters and different). `APP_PASSWORD` signs session tokens and should also be a strong secret. Sessions last 12 hours and use an HttpOnly SameSite cookie; 5 wrong attempts lock the login for 15 minutes. HR Health Check authentication is managed by its external site.
+- CRM and Talent Acquisition have separate email/password logins (`CRM_LOGIN_PASSWORD` and `TALENT_LOGIN_PASSWORD`, each at least 12 characters and different). `APP_PASSWORD` signs session tokens and should also be a strong secret. Sessions last 12 hours and use an HttpOnly SameSite cookie; 5 wrong attempts lock the login for 15 minutes. HR Health Check is public; its report submission is rate-limited and stored in the encrypted database.
 - Every record and setting is encrypted at rest with AES-256-GCM using `CRM_ENCRYPTION_KEY`, which is never stored in the database. `GROQ_API_KEY` and other provider keys set in the environment stay outside the database; keys entered in Settings are encrypted with the CRM settings.
 - **Settings & Import > Download backup** regularly and store it securely. PostgreSQL mode exports a JSON backup of the CRM data; treat it as sensitive because the export contains decrypted record values. SQLite compatibility mode downloads an encrypted SQLite backup.
 - Behind an HTTPS reverse proxy set `CRM_TRUST_PROXY=1`. Never commit `.env`; `.gitignore` excludes it. Configure environment variables in Render rather than uploading `.env`.
@@ -114,9 +121,11 @@ lib/database.js        SQLite compatibility adapter for tests
 lib/database-postgres.js Neon PostgreSQL adapter with encrypted records and version checks
 database/schema.sql    Repeatable Neon schema setup
 lib/tools.js           tasks, deals, templates, reports, CSV export
-lib/ai.js              Groq/OpenAI-compatible AI features
-public/portal.html     product selector for CRM, Talent Acquisition, and HR Health Check
+lib/ai.js              Groq/OpenAI-compatible AI features and validated RecruitIQ prompts
+lib/recruit-iq.js      RecruitIQ job, upload, candidate, match and report APIs
+public/portal.html     product selector for CRM, Talent Acquisition, HR Health Check, and RecruitIQ
 public/talent.*        authenticated candidate pipeline
+public/recruit-iq.*    RecruitIQ dashboard, jobs, CV uploads, candidates, matching and exports
 public/index.html      app shell        public/login.*   sign-in page
 public/app.js          dashboard, clients, mass mail, settings, import
 public/tools.js        tasks, deals board, reports, templates pages
@@ -126,7 +135,7 @@ data/crm.sqlite        created on first run (back it up)
 ```
 
 ## API (for developers; all routes need a signed-in session)
-`POST /api/auth/login|logout`, `GET /api/auth/session`; `GET/POST /api/candidates`, `PUT/DELETE /api/candidates/:id`; `GET/POST /api/clients`, `PUT/DELETE /api/clients/:id`, `GET /api/clients/:id/activities`, `POST /api/clients/:id/activity`, `POST /api/clients/import` (array); `GET /api/dashboard`; `GET/PUT /api/settings`; tasks, deals, templates: `GET/POST /api/{tasks|deals|templates}`, `PUT/DELETE /api/{...}/:id`; `GET /api/reports?days=30`; `GET /api/export/{clients|deals|tasks|activities}.csv`; `POST /api/mail/send`, `/api/mail/send-one`; `GET /api/mail/audience/:key`, `GET /api/campaigns`; `GET /api/backup`; `GET /api/ai/status`, `POST /api/ai/{test|draft|summary|analyze-reply|campaign|assistant}`.
+`POST /api/auth/login|logout`, `GET /api/auth/session`; public HR Health Check submission: `POST /api/health-assessments`; RecruitIQ (Talent Acquisition session): `GET /api/recruit-iq`, `GET/POST /api/recruit-iq/jobs`, `PUT /api/recruit-iq/jobs/:id`, `POST /api/recruit-iq/jobs/{extract|read-document}`, `POST /api/recruit-iq/uploads`, `GET /api/recruit-iq/uploads`, `POST /api/recruit-iq/uploads/:id/retry`, `GET/POST /api/recruit-iq/candidates`, `PUT /api/recruit-iq/candidates/:id`, `POST /api/recruit-iq/jobs/:id/match/:candidateId`, and `GET /api/recruit-iq/export.xlsx`; existing Talent Acquisition: `GET/POST /api/candidates`, `PUT/DELETE /api/candidates/:id`; CRM: `GET/POST /api/clients`, `PUT/DELETE /api/clients/:id`, `GET /api/clients/:id/activities`, `POST /api/clients/:id/activity`, `POST /api/clients/import` (array); `GET /api/dashboard`; `GET/PUT /api/settings`; tasks, deals, templates: `GET/POST /api/{tasks|deals|templates}`, `PUT/DELETE /api/{...}/:id`; `GET /api/reports?days=30`; `GET /api/export/{clients|deals|tasks|activities}.csv`; `POST /api/mail/send`, `/api/mail/send-one`; `GET /api/mail/audience/:key`, `GET /api/campaigns`; `GET /api/backup`; `GET /api/ai/status`, `POST /api/ai/{test|draft|summary|analyze-reply|campaign|assistant}`.
 
 ## Ideas for next steps
 Per-employee accounts and roles, click-to-call (Exotel / Knowlarity), WhatsApp Business API, email open tracking, and shared cache/locking for multi-instance deployments.
