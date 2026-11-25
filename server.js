@@ -299,7 +299,7 @@ app.post('/api/health-assessments', asyncRoute(async (req, res) => {
 }));
 
 const STAGES = ['new', 'contacted', 'replied', 'onboarded', 'rejected'];
-const CANDIDATE_STAGES = ['Screening', 'Interview', 'Shortlisted', 'Offer', 'Joining', 'Rejected', 'Blacklisted'];
+const CANDIDATE_STAGES = ['Screening', 'Interview', 'Shortlisted', 'Offer', 'Joining', 'Joined', 'Rejected', 'Blacklisted', 'Withdrawn'];
 const LEGACY_CANDIDATE_STAGES = { Unspecified: 'Screening', Applied: 'Screening', Hired: 'Joining' };
 function candidateImportStage(stage) { return LEGACY_CANDIDATE_STAGES[stage] || (CANDIDATE_STAGES.includes(stage) ? stage : 'Screening'); }
 function cleanCvShareInput(value, partial = false, validateEmail = true) {
@@ -846,6 +846,7 @@ app.get('/api/ta-export.xlsx', asyncRoute(async (req, res) => {
   const candidates = db.candidates;
   const interviewRows = candidates.flatMap(c => (c.interviews?.length ? c.interviews : [{ date: c.interviewDate, company: c.company, role: c.role, recruiter: c.recruiter, mode: c.interviewMode, time: c.interviewTime, candidateStatus: c.interviewStatus || c.stage, clientStatus: c.clientStatus, email: c.email, phone: c.phone, contactDetails: c.contactDetails, remarks: c.remarks || c.feedback }]).map(i => ({ Candidate: c.name, Recruiter: i.recruiter || c.recruiter || '', 'Interview Date': i.date || '', Company: i.company || c.company || '', Profile: i.role || c.role || '', 'Interview Mode': i.mode || '', 'Interview Time': i.time || '', 'Candidate Status': i.candidateStatus || c.stage || '', 'Client Status': i.clientStatus || '', Email: i.email || c.email || '', Phone: i.phone || c.phone || '', 'Contact Details': i.contactDetails || '', Remarks: i.remarks || '' })));
   const offerRows = candidates.filter(c => ['Shortlisted', 'Offer', 'Joining'].includes(c.stage)).map(c => ({ 'TA Name': c.recruiter || '', Month: c.month || (c.doj ? c.doj.slice(0, 7) : weekStart.slice(0, 7)), Company: c.company || '', Profile: c.role || '', Candidate: c.name, Status: c.stage, 'Final Call': c.finalCall || '', 'Joining Date': c.doj || '', Remarks: c.remarks || '' }));
+  const joinedRows = candidates.filter(c => ['Joined', 'Joining'].includes(c.stage)).map(c => ({ 'TA Name': c.recruiter || '', Month: c.month || (c.doj ? c.doj.slice(0, 7) : weekStart.slice(0, 7)), Company: c.company || '', Profile: c.role || '', Candidate: c.name, Status: c.stage, 'Joining Date': c.doj || '', Remarks: c.remarks || '' }));
   const cvShareRows = (db.taCvShares || []).map(share => ({ 'Share Date': share.sharedAt || '', Recruiter: share.recruiter || '', 'Share Status / Time': share.shareStatus || '', Company: share.company || '', Profile: share.role || '', Candidate: share.candidateName || '', Designation: share.designation || '', Location: share.location || '', 'Work Location': share.workLocation || '', Experience: share.experience || '', 'Current Company': share.currentCompany || '', 'Current CTC': share.currentCtc || '', 'Expected CTC': share.expectedCtc || '', 'Notice Period': share.noticePeriod || '', Remarks: share.remarks || '', Phone: share.phone || '', Email: share.email || '' }));
   const reports = db.weeklyReports.filter(r => r.weekStart === weekStart);
   const weeklyRows = [];
@@ -870,6 +871,7 @@ app.get('/api/ta-export.xlsx', asyncRoute(async (req, res) => {
   }
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(interviewRows), 'Interview Tracker');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(offerRows), 'Shortlisted Offered');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(joinedRows), 'Joined');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(weeklyRows), 'Weekly Tracker');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(cvShareRows), 'CV Shared');
   res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Content-Disposition': `attachment; filename="talent-trackers-${weekStart}.xlsx"`, 'Cache-Control': 'no-store' });

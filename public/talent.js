@@ -1,4 +1,4 @@
-const STAGES = ['Screening', 'Interview', 'Shortlisted', 'Offer', 'Joining', 'Rejected', 'Blacklisted'];
+const STAGES = ['Screening', 'Interview', 'Shortlisted', 'Offer', 'Joining', 'Joined', 'Rejected', 'Blacklisted', 'Withdrawn'];
 const $ = selector => document.querySelector(selector);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 let candidates = [];
@@ -9,7 +9,7 @@ let cvSharePage = 0;
 let visibleCvSharePageIds = [];
 let busy = false;
 const TALENT_VIEW_STATE_KEY = 'right-head-talent-view-state';
-const TRACKER_TABS = ['interviews', 'offers', 'weekly', 'cvshares', 'pipeline'];
+const TRACKER_TABS = ['interviews', 'offers', 'joined', 'weekly', 'cvshares', 'pipeline'];
 function readTalentViewState() {
   try { return JSON.parse(localStorage.getItem(TALENT_VIEW_STATE_KEY) || '{}'); }
   catch { return {}; }
@@ -137,14 +137,15 @@ function render() {
   updateMetrics();
   const query = $('#search').value.trim().toLowerCase();
   const stage = $('#stageFilter').value;
-  const visible = candidates.filter(item => {
-    const matchesText = [item.name, item.role, item.email, item.phone, item.source].some(value => String(value || '').toLowerCase().includes(query));
-    return matchesText && (!stage || item.stage === stage) && candidateMatchesDateFilter(item);
-  }).sort((a, b) => compareDates(candidateDate(a), candidateDate(b)));
+  const visible = candidates.filter(item => !['Joined', 'Joining'].includes(item.stage) && [item.name, item.role, item.email, item.phone, item.source, item.company, item.recruiter].some(value => String(value || '').toLowerCase().includes(query)) && (!stage || item.stage === stage) && candidateMatchesDateFilter(item))
+    .sort((a, b) => compareDates(candidateDate(a), candidateDate(b)));
   $('#candidateRows').innerHTML = visible.map(item => `<tr data-id="${escapeHTML(item.id)}">
     <td><input type="checkbox" data-candidate-select="${escapeHTML(item.id)}" aria-label="Select ${escapeHTML(item.name)}"></td>
     <td><span class="candidate-name">${escapeHTML(item.name)}</span>${item.email ? `<span class="candidate-email">${escapeHTML(item.email)}</span>` : ''}</td>
     <td>${escapeHTML(item.role)}</td>
+    <td>${escapeHTML(item.company || '—')}</td>
+    <td>${escapeHTML(item.recruiter || '—')}</td>
+    <td>${item.sharedDate ? displayDate(item.sharedDate) : '—'}</td>
     <td>${escapeHTML(item.source || '—')}</td>
     <td><label class="sr-only" for="stage-${escapeHTML(item.id)}">Stage for ${escapeHTML(item.name)}</label><select class="stage-select stage-${escapeHTML(item.stage)}" id="stage-${escapeHTML(item.id)}" data-action="stage">${STAGES.map(option => `<option value="${option}" ${item.stage === option ? 'selected' : ''}>${option}</option>`).join('')}</select></td>
     <td>${displayDate(item.createdAt)}</td>
@@ -353,6 +354,11 @@ function renderTrackers() {
   offerCandidates.sort((a, b) => compareDates(offerDate(a), offerDate(b)));
   $('#offerRows').innerHTML = offerCandidates.map(c => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.recruiter)}${td(c.month || c.doj?.slice(0, 7) || c.createdAt?.slice(0, 7))}${td(c.company)}${td(c.role)}${td(c.name)}<td>${stageSelect(c)}</td>${td(c.finalCall)}${td(c.doj)}${td(c.remarks || c.interviews?.at(-1)?.remarks)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
   $('#offerEmpty').hidden = offerCandidates.length > 0;
+  const joinedQuery = trackerSearch('joined');
+  const joinedCandidates = candidates.filter(c => ['Joined', 'Joining'].includes(c.stage) && dateFilterMatch(offerDate(c)) && candidateMatch(c, joinedQuery));
+  joinedCandidates.sort((a, b) => compareDates(offerDate(a), offerDate(b)));
+  $('#joinedRows').innerHTML = joinedCandidates.map(c => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.recruiter)}${td(c.month || c.doj?.slice(0, 7) || c.createdAt?.slice(0, 7))}${td(c.company)}${td(c.role)}${td(c.name)}<td>${stageSelect(c)}</td>${td(c.doj)}${td(c.remarks || c.interviews?.at(-1)?.remarks)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
+  $('#joinedEmpty').hidden = joinedCandidates.length > 0;
   renderCvShares();
   renderWeekly();
   syncSelectionUI();
@@ -415,12 +421,14 @@ function renderWeekly() {
     const report = weeklyReports.find(r => r.recruiter.toLowerCase() === recruiter.toLowerCase());
     const metricRows = TA_METRICS.map(metric => `<tr><th scope="row">${escapeHTML(metric)}</th>${days.map((dayKey, index) => {
       const day = TA_DAYS[index], people = dateFilterMatch(dayKey) ? metricCandidates(recruiter, metric, dayKey) : [];
-      const auto = metric === TA_METRICS[3] ? people.map(c => c.name).join(', ') || '—' : String(people.length);
       const cell = report?.manual?.[metric]?.[day] || {};
-      const target = cell.target ?? (metric === TA_METRICS[0] ? 4 : '');
-      const ratio = metric === TA_METRICS[0] && Number(target) > 0 ? `${Math.round(people.length / Number(target) * 100)}%` : '';
-      const autoLabel = metric === TA_METRICS[0] ? `CV shares: ${people.length} · Target ratio: ${ratio || '—'}` : `Auto: ${auto}`;
-      return `<td class="week-cell"><span class="auto-count" data-auto-count="${metric === TA_METRICS[0] ? people.length : ''}" title="${metric === TA_METRICS[0] ? 'Calculated from CV Shared records for this recruiter and date' : 'Calculated from candidate records'}">${escapeHTML(autoLabel)}</span><label>Target<input type="number" min="0" max="100000" step="1" data-recruiter="${escapeHTML(recruiter)}" data-metric="${escapeHTML(metric)}" data-day="${day}" data-field="target" value="${escapeHTML(target)}"></label><label>Achievement<input type="number" min="0" max="100000" step="1" data-recruiter="${escapeHTML(recruiter)}" data-metric="${escapeHTML(metric)}" data-day="${day}" data-field="achievement" value="${escapeHTML(cell.achievement ?? '')}"></label></td>`;
+      const target = metric === TA_METRICS[0] ? 4 : Number(cell.target) || '';
+      const result = metric === TA_METRICS[3] ? people.map(c => c.name).join(', ') || '—' : String(people.length);
+      const ratio = metric === TA_METRICS[0] ? `${Math.round(people.length / 4 * 100)}%` : '';
+      const achievement = Number(cell.achievement) || 0;
+      const met = achievement >= (Number(target) || 0);
+      const achievementLabel = metric === TA_METRICS[0] ? `${achievement} of 4 · ${met ? 'Target met' : `${Math.round(achievement / 4 * 100)}% of target`}` : String(cell.achievement ?? '');
+      return `<td class="week-cell"><div class="week-result${people.length ? ' has-result' : ''}" title="${metric === TA_METRICS[0] ? 'Result for the day, from CV Shared records for this recruiter and date' : 'Result for the day, from candidate records'}"><span class="result-value">${escapeHTML(result)}</span>${ratio ? `<span class="result-ratio">${escapeHTML(ratio)} of target</span>` : ''}</div><label>Achievement<input type="number" min="0" max="100000" step="1" data-recruiter="${escapeHTML(recruiter)}" data-metric="${escapeHTML(metric)}" data-day="${day}" data-field="achievement" value="${escapeHTML(cell.achievement ?? '')}"></label><small class="achievement-note${achievement ? ' met' : ''}">${escapeHTML(achievementLabel || 'Result is automatic; achievement is entered manually.')}</small></td>`;
     }).join('')}</tr>`).join('');
     return `<section class="recruiter-week"><div class="recruiter-week-heading"><h3>${escapeHTML(recruiter)}</h3><button class="action-button delete" type="button" data-remove-recruiter="${escapeHTML(recruiter)}">Remove</button></div><div class="table-wrap"><table class="weekly-table"><thead><tr><th>Metric</th>${TA_DAYS.map((day, i) => `<th>${day}<small>${days[i].slice(5)}</small></th>`).join('')}</tr></thead><tbody>${metricRows}</tbody></table></div></section>`;
   }).join('') || '<div class="empty-state compact"><strong>No recruiters yet</strong><p>Add a recruiter or assign candidates to a recruiter in their profile.</p></div>';
@@ -440,7 +448,7 @@ async function saveWeekly() {
       const index = weeklyReports.findIndex(row => row.recruiter.toLowerCase() === recruiter.toLowerCase());
       if (index < 0) weeklyReports.push(saved); else weeklyReports[index] = saved;
     }
-    $('#weeklyMessage').textContent = 'Weekly targets and achievements saved.'; $('#weeklyMessage').hidden = false; renderWeekly();
+    $('#weeklyMessage').textContent = 'Weekly achievements saved.'; $('#weeklyMessage').hidden = false; renderWeekly();
   } catch (error) { $('#weeklyMessage').textContent = error.message; $('#weeklyMessage').hidden = false; }
 }
 function addCandidate() { openDialog(); }
@@ -783,13 +791,13 @@ activateTrackerTab(savedTalentViewState.tab || 'interviews', false);
 document.querySelectorAll('[data-add-candidate]').forEach(button => button.addEventListener('click', addCandidate));
 document.querySelectorAll('[data-export]').forEach(button => button.addEventListener('click', exportExcel));
 document.querySelectorAll('[data-search]').forEach(input => input.addEventListener('input', () => { cvSharePage = 0; renderTrackers(); }));
-document.querySelectorAll('#interviewRows, #offerRows').forEach(body => body.addEventListener('change', async event => {
+document.querySelectorAll('#interviewRows, #offerRows, #joinedRows').forEach(body => body.addEventListener('change', async event => {
   const select = event.target.closest('select[data-candidate-stage]'); if (!select) return;
   const candidate = candidates.find(c => c.id === select.dataset.candidateStage); if (!candidate) return;
   try { await api(`/candidates/${encodeURIComponent(candidate.id)}`, 'PUT', { stage: select.value }); await loadCandidates(); }
   catch (error) { showError(error.message); select.value = candidate.stage; }
 }));
-document.querySelectorAll('#interviewRows, #offerRows').forEach(body => body.addEventListener('click', event => {
+document.querySelectorAll('#interviewRows, #offerRows, #joinedRows').forEach(body => body.addEventListener('click', event => {
   const button = event.target.closest('[data-edit-candidate], [data-delete-candidate]'); if (!button) return;
   const c = candidates.find(item => item.id === (button.dataset.editCandidate || button.dataset.deleteCandidate));
   if (!c) return;
@@ -800,12 +808,13 @@ $('#weekStart').addEventListener('change', () => { const date = new Date(`${$('#
 $('#addRecruiter').addEventListener('click', () => { const name = prompt('Recruiter / TA name'); if (!name?.trim()) return; const key = name.trim().toLowerCase(); if (!weeklyReports.some(r => r.recruiter.toLowerCase() === key) && !candidates.some(c => c.recruiter?.toLowerCase() === key)) weeklyReports.push({ id: `draft-${Date.now()}`, weekStart: $('#weekStart').value, recruiter: name.trim(), manual: {} }); renderWeekly(); });
 $('#saveWeekly').addEventListener('click', saveWeekly);
 $('#weeklyRows').addEventListener('input', event => {
-  const target = event.target.closest('input[data-field="target"][data-metric="Candidate Shared"]');
+  const target = event.target.closest('input[data-field="achievement"][data-metric="Candidate Shared"]');
   if (!target) return;
-  const indicator = target.closest('.week-cell')?.querySelector('[data-auto-count]');
-  if (!indicator) return;
-  const count = Number(indicator.dataset.autoCount), value = Number(target.value);
-  indicator.textContent = `CV shares: ${count} · Target ratio: ${value > 0 ? `${Math.round(count / value * 100)}%` : '—'}`;
+  const note = target.closest('.week-cell')?.querySelector('.achievement-note');
+  if (!note) return;
+  const value = Number(target.value) || 0;
+  note.textContent = value >= 4 ? `${value} of 4 · Target met` : `${value} of 4 · ${Math.round(value / 4 * 100)}% of target`;
+  note.classList.toggle('met', value >= 4);
 });
 document.querySelectorAll('[data-close-import]').forEach(button => button.addEventListener('click', () => $('#trackerImportDialog').close()));
 $('#weeklyRows').addEventListener('click', async event => { const button = event.target.closest('[data-remove-recruiter]'); if (!button) return; const name = button.dataset.removeRecruiter; if (candidates.some(c => c.recruiter?.toLowerCase() === name.toLowerCase())) return alert('This recruiter is assigned to candidate records. Change those candidate profiles first.'); const record = weeklyReports.find(r => r.recruiter.toLowerCase() === name.toLowerCase()); try { if (record && !String(record.id).startsWith('draft-')) await api(`/ta-weekly/${encodeURIComponent(record.id)}`, 'DELETE'); weeklyReports = weeklyReports.filter(r => r.recruiter.toLowerCase() !== name.toLowerCase()); renderWeekly(); } catch (error) { $('#weeklyMessage').textContent = error.message; $('#weeklyMessage').hidden = false; } });

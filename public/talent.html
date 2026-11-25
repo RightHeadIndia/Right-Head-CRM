@@ -47,6 +47,7 @@
   <nav class="tracker-tabs" role="tablist" aria-label="Talent Acquisition trackers">
     <button type="button" role="tab" aria-selected="true" data-tab="interviews">Interview Tracker</button>
     <button type="button" role="tab" aria-selected="false" data-tab="offers">Shortlisted / Offered Tracker</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="joined">Joined</button>
     <button type="button" role="tab" aria-selected="false" data-tab="weekly">Weekly Tracker</button>
     <button type="button" role="tab" aria-selected="false" data-tab="cvshares">CV Shared</button>
     <button type="button" role="tab" aria-selected="false" data-tab="pipeline">Candidate Pipeline</button>
@@ -61,6 +62,12 @@
     <section class="candidate-panel">
       <div class="panel-heading"><div><h2>Shortlisted / Offered Tracker</h2><p>Candidate status stays connected to the Interview Tracker.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="offers" placeholder="Search candidates" aria-label="Search shortlisted and offered tracker"></label><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
       <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-select-all aria-label="Select all visible shortlisted candidates"></th><th>TA Name</th><th>Month</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Status</th><th>Final Call</th><th>Joining date</th><th>Remarks</th><th></th></tr></thead><tbody id="offerRows"></tbody></table><div id="offerEmpty" class="empty-state compact" hidden><strong>No shortlisted or offered candidates</strong><p>Change a candidate status to Shortlisted, Offer, or Joining to see them here.</p></div></div>
+    </section>
+  </section>
+  <section class="tracker-view" id="joinedView" hidden>
+    <section class="candidate-panel">
+      <div class="panel-heading"><div><h2>Joined Tracker</h2><p>Candidates who have joined the company, with their joining dates and details.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="joined" placeholder="Search joined candidates" aria-label="Search joined candidates"></label><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-select-all aria-label="Select all visible joined candidates"></th><th>TA Name</th><th>Month</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Status</th><th>Joining date</th><th>Remarks</th><th></th></tr></thead><tbody id="joinedRows"></tbody></table><div id="joinedEmpty" class="empty-state compact" hidden><strong>No joined candidates yet</strong><p>Change a candidate status to Joining or Joined to see them here.</p></div></div>
     </section>
   </section>
   <section class="tracker-view" id="weeklyView" hidden>
@@ -90,7 +97,7 @@
     <div id="statusMessage" class="status-message" role="status" hidden></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th><input type="checkbox" data-select-all aria-label="Select all visible candidates"></th><th>Candidate</th><th>Position</th><th>Source</th><th>Stage</th><th>Added</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <thead><tr><th><input type="checkbox" data-select-all aria-label="Select all visible candidates"></th><th>Candidate</th><th>Position</th><th>Company</th><th>Recruiter</th><th>Profile shared date</th><th>Source</th><th>Stage</th><th>Added</th><th><span class="sr-only">Actions</span></th></tr></thead>
         <tbody id="candidateRows"></tbody>
       </table>
       <div id="emptyState" class="empty-state" hidden><span class="empty-icon" aria-hidden="true">＋</span><strong>No candidates yet</strong><p>Add your first candidate to start building the hiring pipeline.</p><button class="text-button" type="button" id="emptyAdd">Add a candidate <span aria-hidden="true">→</span></button></div>

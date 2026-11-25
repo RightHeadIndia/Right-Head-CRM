@@ -109,9 +109,14 @@ h1 { margin-top: 12px; font-size: 35px; line-height: 1.2; }
 .weekly-table th small { display: block; margin-top: 4px; font-size: 9px; font-weight: 500; letter-spacing: 0; }
 .weekly-table th:first-child { min-width: 145px; }
 .weekly-table td.week-cell { min-width: 145px; padding: 9px; }
-.week-cell .auto-count { display: block; min-height: 26px; margin-bottom: 6px; color: var(--brand); font-size: 10px; font-weight: 700; overflow-wrap: anywhere; }
-.week-cell label { display: flex; align-items: center; justify-content: space-between; gap: 5px; margin-top: 5px; color: var(--subtle); font-size: 9px; }
+.week-cell .week-result { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; padding: 7px 9px; border: 1px solid var(--brand-border); border-radius: 6px; background: var(--brand-soft); }
+.week-cell .week-result:not(.has-result) { opacity: .55; }
+.week-cell .result-value { color: var(--brand); font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
+.week-cell .result-ratio { color: var(--muted); font-size: 9px; font-weight: 600; }
+.week-cell label { display: flex; align-items: center; justify-content: space-between; gap: 5px; color: var(--subtle); font-size: 9px; }
 .week-cell input { width: 68px; min-width: 0; padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font-size: 10px; }
+.week-cell .achievement-note { display: block; margin-top: 4px; color: var(--subtle); font-size: 9px; }
+.week-cell .achievement-note.met { color: #15803d; font-weight: 700; }
 .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 21px 22px; }
 .panel-heading h2 { font-size: 17px; }
 .panel-heading p { margin-top: 5px; font-size: 11px; }
@@ -130,7 +135,7 @@ td { padding: 13px 16px; border-top: 1px solid var(--line-soft); color: var(--mu
 .candidate-email { display: block; margin-top: 3px; color: var(--subtle); font-size: 10px; }
 .raw-status { display: block; margin-top: 4px; color: var(--subtle); font-size: 9px; }
 .stage-pill { display: inline-flex; align-items: center; padding: 5px 9px; border: 1px solid var(--brand-border); border-radius: 99px; background: var(--brand-soft); color: var(--brand); font-size: 10px; font-weight: 600; }
-.stage-Screening, .stage-Interview, .stage-Offer, .stage-Joining, .stage-Rejected, .stage-Blacklisted { border-color: var(--brand-border); background: var(--brand-soft); color: var(--brand); }
+.stage-Screening, .stage-Interview, .stage-Offer, .stage-Joining, .stage-Rejected, .stage-Blacklisted, .stage-Withdrawn, .stage-Joined { border-color: var(--brand-border); background: var(--brand-soft); color: var(--brand); }
 .stage-select { min-width: 115px; padding: 6px 25px 6px 9px; border: 1px solid var(--brand-border); border-radius: 99px; background: var(--brand-soft); color: var(--ink); font-size: 10px; }
 .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .action-button { padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 600; cursor: pointer; }
