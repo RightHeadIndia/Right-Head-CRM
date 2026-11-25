@@ -58,7 +58,7 @@ function renderBrandName(company) {
   companyLabel.textContent = companyName;
   const productLabel = document.createElement('span');
   productLabel.className = 'brand-blue';
-  productLabel.textContent = ' CRM';
+  productLabel.textContent = ' HR Consultants';
   $('#brandName').replaceChildren(companyLabel, productLabel);
   document.title = $('#brandName').textContent;
 }

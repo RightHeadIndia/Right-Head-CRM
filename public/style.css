@@ -19,8 +19,9 @@
   --blue-fill: #1b63b9;
   --blue-fill-hover: #134e94;
   --blue-hover: #134e94;
-  --brand-orange: #ea580c;
-  --brand-orange-hover: #c2410c;
+  --brand-orange: #e85d32;
+  --brand-orange-highlight: #f58a68;
+  --brand-orange-hover: #c94a26;
   --blue-bg: #eaf3fd;
   --blue-border: #bcd5f0;
   --blue-text: #134e94;
@@ -79,7 +80,7 @@
   --transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-#brandName .brand-orange { color: var(--brand-orange); }
+#brandName .brand-orange { color: var(--brand-orange); background-image: linear-gradient(180deg, var(--brand-orange-highlight) 0%, var(--brand-orange) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 #brandName .brand-blue { color: var(--blue); }
 
 /* Base Reset & Typography */
@@ -1846,9 +1847,9 @@ tr.done-row td {
     padding: 18px;
   }
   header {
-    position: relative;
-    top: auto;
-    z-index: auto;
+    position: sticky;
+    top: 0;
+    z-index: 30;
     align-items: flex-start;
   }
   .head-actions {
@@ -1893,8 +1894,9 @@ tr.done-row td {
   --blue-fill: #1b63b9;
   --blue-fill-hover: #2274d8;
   --blue-hover: #9ad1fc;
-  --brand-orange: #fb923c;
-  --brand-orange-hover: #fdba74;
+  --brand-orange: #f0784f;
+  --brand-orange-highlight: #ffb99f;
+  --brand-orange-hover: #ff9a75;
   --blue-bg: #14354b;
   --blue-border: #2c5979;
   --blue-text: #9ad1fc;

@@ -9,8 +9,9 @@
   --brand: #1b63b9;
   --brand-strong: #134e94;
   --brand-soft: #eaf3fd;
-  --brand-orange: #ea580c;
-  --brand-orange-hover: #c2410c;
+  --brand-orange: #e85d32;
+  --brand-orange-highlight: #f58a68;
+  --brand-orange-hover: #c94a26;
   --decor-line: rgba(27, 99, 185, .18);
   --shadow: 0 20px 48px rgba(20, 50, 75, .08);
 }
@@ -26,8 +27,9 @@
   --brand: #72bbf8;
   --brand-strong: #9ad1fc;
   --brand-soft: #14354b;
-  --brand-orange: #fb923c;
-  --brand-orange-hover: #fdba74;
+  --brand-orange: #f0784f;
+  --brand-orange-highlight: #ffb99f;
+  --brand-orange-hover: #ff9a75;
   --decor-line: rgba(114, 187, 248, .22);
   --shadow: 0 20px 48px rgba(0, 0, 0, .36);
 }
@@ -103,9 +105,9 @@ body {
 }
 h1 { margin: 0; color: var(--ink); font: 800 clamp(36px, 5.2vw, 52px)/1.08 Manrope, "DM Sans", -apple-system, sans-serif; letter-spacing: .02em; text-shadow: 0 4px 20px rgba(27, 99, 185, .12); }
 h1 span, h1 em { display: block; }
-h1 span { color: var(--brand-orange); }
+h1 span { color: var(--brand-orange); background-image: linear-gradient(180deg, var(--brand-orange-highlight) 0%, var(--brand-orange) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 h1 em { margin-top: 4px; color: var(--brand); font-style: normal; }
-.brand-orange { color: var(--brand-orange); }
+.brand-orange { color: var(--brand-orange); background-image: linear-gradient(180deg, var(--brand-orange-highlight) 0%, var(--brand-orange) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 .brand-blue { color: var(--brand); }
 .products { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 10px; }
 .product-card {
