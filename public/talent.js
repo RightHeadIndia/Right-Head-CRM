@@ -3,13 +3,18 @@ const $ = selector => document.querySelector(selector);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 let candidates = [];
 let cvShares = [];
+let recruiterDirectory = [];
 const selectedCandidateIds = new Set();
 const selectedCvShareIds = new Set();
+const selectedImportArchiveIds = new Set();
+const selectedImportedShareIds = new Set();
 let cvSharePage = 0;
+let importedSharePage = 0;
 let visibleCvSharePageIds = [];
+let visibleImportedSharePageIds = [];
 let busy = false;
 const TALENT_VIEW_STATE_KEY = 'right-head-talent-view-state';
-const TRACKER_TABS = ['interviews', 'offers', 'joined', 'weekly', 'cvshares', 'pipeline'];
+const TRACKER_TABS = ['interviews', 'offers', 'joined', 'weekly', 'cvshares', 'recruiters', 'importhistory', 'pipeline'];
 function readTalentViewState() {
   try { return JSON.parse(localStorage.getItem(TALENT_VIEW_STATE_KEY) || '{}'); }
   catch { return {}; }
@@ -34,6 +39,40 @@ const api = async (url, method = 'GET', body) => {
   return data;
 };
 
+function renderRecruiterOptions() {
+  const names = new Set(recruiterDirectory.map(p => p.name.trim()).filter(Boolean));
+  (candidates || []).forEach(c => {
+    if (c.recruiter && c.recruiter.trim()) names.add(c.recruiter.trim());
+    (c.interviews || []).forEach(i => { if (i.recruiter && i.recruiter.trim()) names.add(i.recruiter.trim()); });
+  });
+  (cvShares || []).forEach(s => {
+    if (s.recruiter && s.recruiter.trim()) names.add(s.recruiter.trim());
+  });
+  const sorted = [...names].sort((a, b) => a.localeCompare(b));
+
+  const options = sorted.map(name => `<option value="${escapeHTML(name)}"></option>`).join('');
+  if ($('#recruiterNames')) $('#recruiterNames').innerHTML = options;
+  const filter = $('#recruiterFilter');
+  if (filter) {
+    const selected = filter.value || readTalentViewState().recruiter || '';
+    filter.innerHTML = `<option value="">All recruiters</option>${sorted.map(name => `<option value="${escapeHTML(name)}">${escapeHTML(name)}</option>`).join('')}`;
+    if ([...filter.options].some(option => option.value === selected)) filter.value = selected;
+  }
+}
+async function loadRecruiters() {
+  try { recruiterDirectory = await api('/ta-recruiters'); renderRecruiterOptions(); renderWeekly(); renderRecruiterAnalytics(); }
+  catch (error) { showError(error.message); }
+}
+async function saveRecruiterName(value) {
+  const name = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!name) return '';
+  const saved = await api('/ta-recruiters', 'POST', { name });
+  if (!recruiterDirectory.some(person => person.name.toLocaleLowerCase() === saved.name.toLocaleLowerCase())) recruiterDirectory.push(saved);
+  recruiterDirectory.sort((a, b) => a.name.localeCompare(b.name));
+  renderRecruiterOptions();
+  return saved.name;
+}
+
 function populateStageOptions() {
   $('#stageFilter').insertAdjacentHTML('beforeend', STAGES.map(stage => `<option value="${stage}">${stage}</option>`).join(''));
   $('select[name="stage"]').innerHTML = STAGES.map(stage => `<option value="${stage}">${stage}</option>`).join('');
@@ -50,7 +89,7 @@ function showError(message) {
 }
 function displayDate(value) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+  return Number.isNaN(date.getTime()) ? '”?' : date.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
 }
 function normalizedDateKey(value) {
   if (!value) return '';
@@ -91,7 +130,7 @@ function offerDate(candidate) {
   return firstDateKey(candidate.doj, candidate.offeredDate, candidate.shortlistedDate, candidateMonthKey(candidate.month), candidate.createdAt);
 }
 function candidateMatchesDateFilter(candidate) {
-  const eventDates = [candidate.interviewDate, candidate.sharedDate, candidate.doj, candidate.offeredDate, candidate.shortlistedDate,
+  const eventDates = [candidate.interviewDate, candidate.sharedDate, candidate.doj, candidate.offeredDate, candidate.shortlistedDate, candidate.rejectedDate,
     ...(candidate.interviews || []).flatMap(item => [item.date, item.sharedDate]),
     ...(candidate.statusHistory || []).map(item => item.at || item.date)].filter(Boolean);
   const dates = eventDates.length ? eventDates : [candidate.month, candidate.createdAt];
@@ -109,6 +148,16 @@ function dateFilterMatch(value) {
   if (!key) return false;
   return (!month || key.slice(5, 7) === month) && (!date || key === date) && (!year || key.slice(0, 4) === year);
 }
+function recruiterFilterMatches(value) {
+  const selected = $('#recruiterFilter')?.value || '';
+  return !selected || String(value || '').trim().toLocaleLowerCase() === selected.toLocaleLowerCase();
+}
+function candidateMatchesRecruiter(candidate) {
+  const selected = $('#recruiterFilter')?.value || '';
+  if (!selected) return true;
+  const names = [candidate.recruiter, ...(candidate.interviews || []).map(row => row.recruiter), ...(candidate.statusHistory || []).map(row => row.recruiter)];
+  return names.some(name => recruiterFilterMatches(name));
+}
 function sortByDate(rows) {
   return rows.sort((a, b) => compareDates(candidateDate(a.candidate || a, a.entry), candidateDate(b.candidate || b, b.entry)));
 }
@@ -116,7 +165,7 @@ function populateYearFilters() {
   const current = $('#filterYear').value;
   const dates = candidates.flatMap(candidate => [
     candidate.interviewDate, candidate.sharedDate, candidate.doj, candidate.offeredDate,
-    candidate.shortlistedDate, candidate.createdAt,
+    candidate.shortlistedDate, candidate.rejectedDate, candidate.createdAt,
     candidate.month,
     ...(candidate.interviews || []).flatMap(item => [item.date, item.sharedDate]),
     ...(candidate.statusHistory || []).map(item => item.at || item.date)
@@ -127,7 +176,7 @@ function populateYearFilters() {
   $('#filterYear').value = years.includes(selected) ? selected : '';
 }
 function updateMetrics() {
-  const filtered = candidates.filter(candidateMatchesDateFilter);
+  const filtered = candidates.filter(candidate => candidateMatchesDateFilter(candidate) && candidateMatchesRecruiter(candidate));
   $('#totalCount').textContent = filtered.length;
   $('#activeCount').textContent = filtered.filter(item => ['Screening', 'Interview', 'Shortlisted', 'Offer'].includes(item.stage)).length;
   $('#interviewCount').textContent = filtered.filter(item => item.stage === 'Interview').length;
@@ -137,16 +186,16 @@ function render() {
   updateMetrics();
   const query = $('#search').value.trim().toLowerCase();
   const stage = $('#stageFilter').value;
-  const visible = candidates.filter(item => !['Joined', 'Joining'].includes(item.stage) && [item.name, item.role, item.email, item.phone, item.source, item.company, item.recruiter].some(value => String(value || '').toLowerCase().includes(query)) && (!stage || item.stage === stage) && candidateMatchesDateFilter(item))
+  const visible = candidates.filter(item => !['Joined', 'Joining'].includes(item.stage) && [item.name, item.role, item.email, item.phone, item.source, item.company, item.recruiter].some(value => String(value || '').toLowerCase().includes(query)) && (!stage || item.stage === stage) && candidateMatchesDateFilter(item) && candidateMatchesRecruiter(item))
     .sort((a, b) => compareDates(candidateDate(a), candidateDate(b)));
   $('#candidateRows').innerHTML = visible.map(item => `<tr data-id="${escapeHTML(item.id)}">
     <td><input type="checkbox" data-candidate-select="${escapeHTML(item.id)}" aria-label="Select ${escapeHTML(item.name)}"></td>
     <td><span class="candidate-name">${escapeHTML(item.name)}</span>${item.email ? `<span class="candidate-email">${escapeHTML(item.email)}</span>` : ''}</td>
     <td>${escapeHTML(item.role)}</td>
-    <td>${escapeHTML(item.company || '—')}</td>
-    <td>${escapeHTML(item.recruiter || '—')}</td>
-    <td>${item.sharedDate ? displayDate(item.sharedDate) : '—'}</td>
-    <td>${escapeHTML(item.source || '—')}</td>
+    <td>${escapeHTML(item.company || '”?')}</td>
+    <td>${escapeHTML(item.recruiter || '”?')}</td>
+    <td>${item.sharedDate ? displayDate(item.sharedDate) : '”?'}</td>
+    <td>${escapeHTML(item.source || '”?')}</td>
     <td><label class="sr-only" for="stage-${escapeHTML(item.id)}">Stage for ${escapeHTML(item.name)}</label><select class="stage-select stage-${escapeHTML(item.stage)}" id="stage-${escapeHTML(item.id)}" data-action="stage">${STAGES.map(option => `<option value="${option}" ${item.stage === option ? 'selected' : ''}>${option}</option>`).join('')}</select></td>
     <td>${displayDate(item.createdAt)}</td>
     <td><div class="row-actions"><button class="action-button" type="button" data-action="edit">Edit</button><button class="action-button delete" type="button" data-action="delete">Delete</button></div></td>
@@ -196,7 +245,7 @@ function openDialog(candidate) {
   $('#dialogTitle').textContent = candidate ? 'Edit candidate' : 'Add candidate';
   $('#saveCandidate').textContent = candidate ? 'Save changes' : 'Save candidate';
   if (candidate) {
-      for (const field of ['name', 'role', 'stage', 'email', 'phone', 'source', 'notes', 'company', 'recruiter', 'month', 'interviewDate', 'sharedDate', 'finalCall', 'doj', 'feedback', 'remarks']) {
+      for (const field of ['name', 'role', 'stage', 'email', 'phone', 'source', 'notes', 'company', 'recruiter', 'month', 'interviewDate', 'sharedDate', 'shortlistedDate', 'offeredDate', 'rejectedDate', 'finalCall', 'doj', 'feedback', 'remarks']) {
       form.elements[field].value = candidate[field] || (field === 'stage' ? 'Screening' : '');
     }
   } else {
@@ -215,6 +264,7 @@ async function submitCandidate(event) {
   setBusy(true);
   $('#formError').textContent = '';
   try {
+    values.recruiter = await saveRecruiterName(values.recruiter);
     await api(id ? `/candidates/${encodeURIComponent(id)}` : '/candidates', id ? 'PUT' : 'POST', values);
     $('#candidateDialog').close();
     await loadCandidates();
@@ -315,13 +365,95 @@ $('#deleteSelectedCvShares').addEventListener('click', async event => {
   } catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
   finally { button.disabled = false; }
 });
+$('#importedShareRows').addEventListener('click', async event => {
+  const edit = event.target.closest('[data-edit-imported-share]'), remove = event.target.closest('[data-delete-imported-share]');
+  if (edit) { const share = cvShares.find(item => item.id === edit.dataset.editImportedShare); if (share) openCvShareDialog(share); return; }
+  if (!remove) return;
+  const share = cvShares.find(item => item.id === remove.dataset.deleteImportedShare);
+  if (!share || !confirm(`Delete the imported CV share for ${share.candidateName}? This also removes it from CV Shared.`)) return;
+  try { await api(`/ta-cv-shares/${encodeURIComponent(share.id)}`, 'DELETE'); await loadCvShares(); }
+  catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
+});
+$('#importedShareRows').addEventListener('change', event => {
+  const checkbox = event.target.closest('[data-imported-share-select]'); if (!checkbox) return;
+  if (checkbox.checked) selectedImportedShareIds.add(checkbox.dataset.importedShareSelect); else selectedImportedShareIds.delete(checkbox.dataset.importedShareSelect);
+  renderImportedShareHistory();
+});
+$('#selectAllImportedShares').addEventListener('change', event => {
+  visibleImportedSharePageIds.forEach(id => event.target.checked ? selectedImportedShareIds.add(id) : selectedImportedShareIds.delete(id));
+  renderImportedShareHistory();
+});
+$('#importedSharePrevPage').addEventListener('click', () => { importedSharePage = Math.max(0, importedSharePage - 1); renderImportedShareHistory(); });
+$('#importedShareNextPage').addEventListener('click', () => { importedSharePage++; renderImportedShareHistory(); });
+$('#deleteSelectedImportedShares').addEventListener('click', async event => {
+  const ids = [...selectedImportedShareIds];
+  if (!ids.length || !confirm(`Delete ${ids.length} selected imported CV share row${ids.length === 1 ? '' : 's'} from the live CV Shared tracker? This cannot be undone.`)) return;
+  const button = event.currentTarget; button.disabled = true;
+  try {
+    const result = await api('/ta-cv-shares/bulk-delete', 'POST', { ids });
+    selectedImportedShareIds.clear(); await loadCvShares();
+    $('#workspaceMessage').textContent = `Deleted ${result.deleted} imported CV share row${result.deleted === 1 ? '' : 's'}.`; $('#workspaceMessage').hidden = false;
+  } catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
+  finally { button.disabled = false; }
+});
+$('#historyAddRecruiter').addEventListener('click', async () => {
+  const name = prompt('Recruiter / TA name');
+  if (!name?.trim()) return;
+  try { const saved = await saveRecruiterName(name); $('#importedShareRecruiter').value = saved; }
+  catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
+});
+$('#assignImportedShareRecruiter').addEventListener('click', async event => {
+  const typed = $('#importedShareRecruiter').value.trim(), ids = [...selectedImportedShareIds];
+  if (!typed || !ids.length) { $('#workspaceMessage').textContent = 'Select imported rows and enter a recruiter name.'; $('#workspaceMessage').hidden = false; return; }
+  const button = event.currentTarget; button.disabled = true;
+  try {
+    const recruiter = await saveRecruiterName(typed);
+    const result = await api('/ta-cv-shares/bulk-update', 'POST', { ids, recruiter });
+    selectedImportedShareIds.clear();
+    $('#workspaceMessage').textContent = `Assigned ${recruiter} to ${result.updated} imported CV share row${result.updated === 1 ? '' : 's'}.`; $('#workspaceMessage').hidden = false;
+    await loadCvShares();
+  } catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
+  finally { button.disabled = false; }
+});
+$('#historicalImportReports').addEventListener('change', event => {
+  const checkbox = event.target.closest('[data-import-archive-select]'); if (!checkbox) return;
+  if (checkbox.checked) selectedImportArchiveIds.add(checkbox.dataset.importArchiveSelect); else selectedImportArchiveIds.delete(checkbox.dataset.importArchiveSelect);
+  loadImportReports();
+});
+$('#selectAllImportArchives').addEventListener('change', event => {
+  importReports.forEach(item => event.target.checked ? selectedImportArchiveIds.add(item.id) : selectedImportArchiveIds.delete(item.id));
+  loadImportReports();
+});
+$('#clearImportArchiveSelection').addEventListener('click', () => { selectedImportArchiveIds.clear(); loadImportReports(); });
+$('#historicalImportReports').addEventListener('click', async event => {
+  const rename = event.target.closest('[data-edit-import-archive]'), remove = event.target.closest('[data-delete-import-archive]');
+  if (rename) {
+    const item = importReports.find(report => report.id === rename.dataset.editImportArchive); if (!item) return;
+    const sourceName = prompt('Edit archive name', item.sourceName); if (!sourceName?.trim() || sourceName.trim() === item.sourceName) return;
+    try { await api(`/ta-imports/${encodeURIComponent(item.id)}`, 'PUT', { sourceName: sourceName.trim() }); await loadImportReports(); }
+    catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
+    return;
+  }
+  if (remove) {
+    const item = importReports.find(report => report.id === remove.dataset.deleteImportArchive); if (!item || !confirm(`Delete the archived workbook "${item.sourceName}"? Imported tracker rows will remain in their trackers.`)) return;
+    try { await api(`/ta-imports/${encodeURIComponent(item.id)}`, 'DELETE'); selectedImportArchiveIds.delete(item.id); await loadImportReports(); }
+    catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
+  }
+});
+$('#deleteSelectedImportArchives').addEventListener('click', async () => {
+  const ids = [...selectedImportArchiveIds];
+  if (!ids.length || !confirm(`Delete ${ids.length} archived workbook${ids.length === 1 ? '' : 's'}? Imported tracker rows will remain.`)) return;
+  try { const result = await api('/ta-imports', 'DELETE', { ids }); selectedImportArchiveIds.clear(); await loadImportReports(); $('#workspaceMessage').textContent = `Deleted ${result.deleted} workbook archive${result.deleted === 1 ? '' : 's'}.`; $('#workspaceMessage').hidden = false; }
+  catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
+});
+$('#refreshImportHistory').addEventListener('click', async () => { await Promise.all([loadImportReports(), loadCvShares()]); });
 $('#search').addEventListener('input', render);
 $('#stageFilter').addEventListener('change', render);
 function persistDateFilters() {
-  saveTalentViewState({ month: $('#filterMonth').value, date: $('#filterDate').value, year: $('#filterYear').value, sort: $('#dateSort').value });
+  saveTalentViewState({ month: $('#filterMonth').value, date: $('#filterDate').value, year: $('#filterYear').value, recruiter: $('#recruiterFilter').value, sort: $('#dateSort').value });
 }
-['filterMonth', 'filterDate', 'filterYear', 'dateSort'].forEach(id => $(`#${id}`).addEventListener('change', () => { cvSharePage = 0; persistDateFilters(); render(); }));
-$('#clearDateFilters').addEventListener('click', () => { $('#filterMonth').value = ''; $('#filterDate').value = ''; $('#filterYear').value = ''; $('#dateSort').value = 'newest'; cvSharePage = 0; persistDateFilters(); render(); });
+['filterMonth', 'filterDate', 'filterYear', 'recruiterFilter', 'dateSort'].forEach(id => $(`#${id}`).addEventListener('change', () => { cvSharePage = 0; persistDateFilters(); render(); }));
+$('#clearDateFilters').addEventListener('click', () => { $('#filterMonth').value = ''; $('#filterDate').value = ''; $('#filterYear').value = ''; $('#recruiterFilter').value = ''; $('#dateSort').value = 'newest'; cvSharePage = 0; persistDateFilters(); render(); });
 $('#closeDialog').addEventListener('click', () => $('#candidateDialog').close());
 $('#cancelDialog').addEventListener('click', () => $('#candidateDialog').close());
 $('#logout').addEventListener('click', async () => {
@@ -338,36 +470,278 @@ const TA_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturd
 let weeklyReports = [];
 const trackerSearch = name => document.querySelector(`[data-search="${name}"]`)?.value.trim().toLowerCase() || '';
 const candidateMatch = (candidate, query) => [candidate.name, candidate.company, candidate.role, candidate.recruiter, candidate.stage, candidate.feedback, candidate.remarks].some(value => String(value || '').toLowerCase().includes(query));
-const td = value => `<td>${escapeHTML(value || '—')}</td>`;
+const td = value => `<td>${escapeHTML(value || '”?')}</td>`;
 const stageSelect = candidate => `<select class="stage-select" data-candidate-stage="${escapeHTML(candidate.id)}" aria-label="Status for ${escapeHTML(candidate.name)}">${STAGES.map(stage => `<option ${candidate.stage === stage ? 'selected' : ''}>${stage}</option>`).join('')}</select>`;
+function recruiterIdentity(record, nameField = 'candidateName') {
+  const email = String(record.email || '').trim().toLowerCase();
+  const phone = String(record.phone || '').replace(/\D/g, '').slice(-10);
+  return email ? `email:${email}` : phone ? `phone:${phone}` : `name:${String(record[nameField] || record.name || '').trim().toLowerCase()}|${String(record.role || record.profile || '').trim().toLowerCase()}|${String(record.company || '').trim().toLowerCase()}`;
+}
+function recruiterSaturdayTarget(date) {
+  if (date.getDay() !== 6) return 4;
+  const saturdayNumber = Math.ceil(date.getDate() / 7);
+  return [2, 4].includes(saturdayNumber) ? 0 : 2;
+}
+function renderRecruiterWeekly(recruiters) {
+  const root = $('#recruiterWeeklyAnalytics');
+  if (!root) return;
+  if (!recruiters.length) { root.innerHTML = '<p class="empty-state compact">Recruiter weekly totals will appear when recruiter records are available.</p>'; return; }
+  const input = $('#recruiterWeekStart');
+  if (!input.value) input.value = localDateKey(mondayFor(new Date()));
+  const [year, month, day] = input.value.split('-').map(Number);
+  const monday = new Date(year, month - 1, day);
+  if (Number.isNaN(monday.getTime())) { root.innerHTML = '<p class="empty-state compact">Choose a valid Monday to view weekly recruiter data.</p>'; return; }
+  const days = Array.from({ length: 6 }, (_, index) => { const date = new Date(monday); date.setDate(date.getDate() + index); return { date, key: localDateKey(date), target: recruiterSaturdayTarget(date) }; });
+  const normalize = value => String(value || '').trim().toLocaleLowerCase();
+  const sameRecruiter = (value, name) => normalize(value) === normalize(name);
+  const countsFor = recruiter => {
+    const metrics = days.map(() => ({ shares: 0, shortlisted: new Set(), interviews: 0, offers: new Set(), joins: new Set(), rejected: new Set() }));
+    const periodCandidates = { shortlisted: new Set(), offers: new Set(), joins: new Set(), rejected: new Set() };
+    cvShares.forEach(share => {
+      const date = cvShareDate(share), index = days.findIndex(item => item.key === date);
+      if (index >= 0 && sameRecruiter(share.recruiter, recruiter)) metrics[index].shares++;
+    });
+    candidates.forEach(candidate => {
+      const events = candidateEvents(candidate);
+      events.forEach(event => {
+        const index = days.findIndex(item => item.key === normalizedDateKey(event.at || event.date));
+        if (index < 0 || !sameRecruiter(event.recruiter || candidate.recruiter, recruiter)) return;
+        if (event.stage === 'Shortlisted') { metrics[index].shortlisted.add(candidate.id); periodCandidates.shortlisted.add(candidate.id); }
+        if (event.stage === 'Offer') { metrics[index].offers.add(candidate.id); periodCandidates.offers.add(candidate.id); }
+        if (['Joining', 'Joined'].includes(event.stage)) { metrics[index].joins.add(candidate.id); periodCandidates.joins.add(candidate.id); }
+        if (event.stage === 'Rejected') { metrics[index].rejected.add(candidate.id); periodCandidates.rejected.add(candidate.id); }
+      });
+      const legacy = candidate.interviewDate || candidate.interviewMode || candidate.interviewStatus || candidate.company || candidate.role
+        ? [{ date: candidate.interviewDate, recruiter: candidate.recruiter, candidateStatus: candidate.interviewStatus, clientStatus: candidate.clientStatus, finalCall: candidate.finalCall }]
+        : [];
+      (candidate.interviews?.length ? candidate.interviews : legacy).forEach(interview => {
+        const index = days.findIndex(item => item.key === normalizedDateKey(interview.date || candidate.interviewDate));
+        if (index < 0 || !sameRecruiter(interview.recruiter || candidate.recruiter, recruiter)) return;
+        if (days[index].key <= localDateKey(new Date())) metrics[index].interviews++;
+      });
+    });
+    return metrics.map((item, index) => ({ ...item, shortlisted: item.shortlisted.size, offers: item.offers.size, joins: item.joins.size, rejected: item.rejected.size, target: days[index].target, periodCandidates }));
+  };
+  const labels = [['CV profiles shared', 'shares'], ['Candidates shortlisted', 'shortlisted'], ['Interviews conducted', 'interviews'], ['Offers / closures', 'offers'], ['Candidates joined', 'joins'], ['Candidates rejected', 'rejected']];
+  const totals = values => Object.fromEntries(labels.map(([, key]) => [key, values.reduce((sum, item) => sum + item[key], 0)]));
+  root.innerHTML = recruiters.map(recruiter => {
+    const values = countsFor(recruiter.name), total = totals(values), weeklyTarget = values.reduce((sum, item) => sum + item.target, 0);
+    for (const key of ['shortlisted', 'offers', 'joins', 'rejected']) total[key] = values[0]?.periodCandidates[key].size || 0;
+    const rows = labels.map(([label, key]) => {
+      const cells = values.map((item, index) => {
+        if (key !== 'shares') return `<td>${item[key]}</td>`;
+        const target = item.target;
+        const state = target === 0 ? 'off' : item.shares >= target ? 'met' : '';
+        return `<td><strong class="recruiter-day-count ${state}">${item.shares}</strong><small>${target ? `of ${target}` : 'Off'}</small></td>`;
+      }).join('');
+      const totalTarget = key === 'shares' ? `<strong class="recruiter-week-target">${total.shares} / ${weeklyTarget}</strong>` : `<strong>${total[key]}</strong>`;
+      return `<tr><th scope="row">${label}</th>${cells}<td class="recruiter-week-total">${totalTarget}</td></tr>`;
+    }).join('');
+    const columns = days.map(item => `<th>${item.date.toLocaleDateString(undefined, { weekday: 'short' })}<small>${item.date.getDate()} ${item.date.toLocaleDateString(undefined, { month: 'short' })}${item.date.getDay() === 6 ? `<br>${item.target ? 'Half day · target 2' : 'Off day'}` : '<br>Target 4 shares'}</small></th>`).join('');
+    return `<article class="recruiter-weekly-card"><div class="recruiter-weekly-card-heading"><h4>${escapeHTML(recruiter.name)}</h4><span>Profile share target: ${weeklyTarget} this week</span></div><div class="table-wrap recruiter-weekly-table-wrap"><table class="recruiter-weekly-table"><thead><tr><th>Weekly metric</th>${columns}<th>Week total</th></tr></thead><tbody>${rows}</tbody></table></div></article>`;
+  }).join('');
+}
+function renderRecruiterMonthly(recruiters) {
+  const root = $('#recruiterMonthlyAnalytics');
+  if (!root) return;
+  const input = $('#recruiterMonth');
+  if (!input.value) input.value = localDateKey(new Date()).slice(0, 7);
+  const monthKey = input.value;
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) { root.innerHTML = '<p class="empty-state compact">Choose a month to view recruiter activity.</p>'; return; }
+  if (!recruiters.length) { root.innerHTML = '<p class="empty-state compact">Monthly recruiter totals will appear when recruiter records are available.</p>'; return; }
+  const [year, month] = monthKey.split('-').map(Number);
+  const monthDate = new Date(year, month - 1, 1);
+  const monthEnd = new Date(year, month, 0).getDate();
+  const days = Array.from({ length: monthEnd }, (_, index) => {
+    const date = new Date(year, month - 1, index + 1);
+    return { date, key: localDateKey(date), target: date.getDay() === 6 ? recruiterSaturdayTarget(date) : date.getDay() === 0 ? 0 : 4 };
+  });
+  const shareTarget = days.reduce((sum, item) => sum + item.target, 0);
+  const sameRecruiter = value => String(value || '').trim().toLocaleLowerCase();
+  const reportFor = recruiter => {
+    const report = { shares: 0, profiles: new Set(), shortlisted: new Set(), interviews: 0, offers: new Set(), joins: new Set(), rejected: new Set() };
+    cvShares.forEach(share => {
+      const date = normalizedDateKey(cvShareDate(share));
+      if (sameRecruiter(share.recruiter) !== sameRecruiter(recruiter.name) || !date.startsWith(`${monthKey}-`)) return;
+      report.shares++;
+      report.profiles.add(recruiterIdentity(share));
+    });
+    candidates.forEach(candidate => {
+      const events = candidateEvents(candidate);
+      events.forEach(event => {
+        const date = normalizedDateKey(event.at || event.date);
+        if (sameRecruiter(event.recruiter || candidate.recruiter) !== sameRecruiter(recruiter.name) || !date.startsWith(`${monthKey}-`)) return;
+        if (event.stage === 'Shortlisted') report.shortlisted.add(candidate.id || candidate.name);
+        if (event.stage === 'Offer') report.offers.add(candidate.id || candidate.name);
+        if (['Joining', 'Joined'].includes(event.stage)) report.joins.add(candidate.id || candidate.name);
+        if (event.stage === 'Rejected') report.rejected.add(candidate.id || candidate.name);
+      });
+      const legacy = candidate.interviewDate || candidate.interviewMode || candidate.interviewStatus || candidate.company || candidate.role
+        ? [{ date: candidate.interviewDate, recruiter: candidate.recruiter, candidateStatus: candidate.interviewStatus, clientStatus: candidate.clientStatus, finalCall: candidate.finalCall }]
+        : [];
+      (candidate.interviews?.length ? candidate.interviews : legacy).forEach(interview => {
+        const date = normalizedDateKey(interview.date || candidate.interviewDate);
+        if (sameRecruiter(interview.recruiter || candidate.recruiter) !== sameRecruiter(recruiter.name) || !date.startsWith(`${monthKey}-`)) return;
+        const candidateId = candidate.id || candidate.name;
+        if (date <= localDateKey(new Date())) report.interviews++;
+      });
+      if (normalizedDateKey(candidate.sharedDate).startsWith(`${monthKey}-`) && sameRecruiter(candidate.recruiter) === sameRecruiter(recruiter.name)) report.profiles.add(recruiterIdentity(candidate, 'name'));
+    });
+    report.profiles = report.profiles.size;
+    return report;
+  };
+  const dailyFor = recruiter => {
+    const rows = days.map(item => ({ ...item, shares: 0, shortlisted: new Set(), interviews: 0, offers: new Set(), joins: new Set(), rejected: new Set() }));
+    cvShares.forEach(share => {
+      const index = days.findIndex(item => item.key === normalizedDateKey(cvShareDate(share)));
+      if (index >= 0 && sameRecruiter(share.recruiter) === sameRecruiter(recruiter.name)) rows[index].shares++;
+    });
+    candidates.forEach(candidate => {
+      const events = candidateEvents(candidate);
+      events.forEach(event => {
+        const index = days.findIndex(item => item.key === normalizedDateKey(event.at || event.date));
+        if (index < 0 || sameRecruiter(event.recruiter || candidate.recruiter) !== sameRecruiter(recruiter.name)) return;
+        const id = candidate.id || candidate.name;
+        if (event.stage === 'Shortlisted') rows[index].shortlisted.add(id);
+        if (event.stage === 'Offer') rows[index].offers.add(id);
+        if (['Joining', 'Joined'].includes(event.stage)) rows[index].joins.add(id);
+        if (event.stage === 'Rejected') rows[index].rejected.add(id);
+      });
+      const legacy = candidate.interviewDate || candidate.interviewMode || candidate.interviewStatus || candidate.company || candidate.role
+        ? [{ date: candidate.interviewDate, recruiter: candidate.recruiter, candidateStatus: candidate.interviewStatus, clientStatus: candidate.clientStatus, finalCall: candidate.finalCall }]
+        : [];
+      (candidate.interviews?.length ? candidate.interviews : legacy).forEach(interview => {
+        const index = days.findIndex(item => item.key === normalizedDateKey(interview.date || candidate.interviewDate));
+        if (index < 0 || sameRecruiter(interview.recruiter || candidate.recruiter) !== sameRecruiter(recruiter.name)) return;
+        if (days[index].key <= localDateKey(new Date())) rows[index].interviews++;
+        const id = candidate.id || candidate.name;
+      });
+    });
+    return rows.map(item => ({ ...item, shortlisted: item.shortlisted.size, offers: item.offers.size, joins: item.joins.size, rejected: item.rejected.size }));
+  };
+  const title = monthDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  root.innerHTML = recruiters.map(recruiter => {
+    const report = reportFor(recruiter), sharePercent = shareTarget ? Math.min(100, Math.round(report.shares / shareTarget * 100)) : 0;
+    const daily = dailyFor(recruiter);
+    const metrics = [['CV profiles shared', report.shares], ['Unique profiles', report.profiles], ['Shortlisted', report.shortlisted.size], ['Interviews conducted', report.interviews], ['Offers / closures', report.offers.size], ['Candidates joined', report.joins.size], ['Candidates rejected', report.rejected.size]];
+    const labels = [['CV profiles shared', 'shares'], ['Candidates shortlisted', 'shortlisted'], ['Interviews conducted', 'interviews'], ['Offers / closures', 'offers'], ['Candidates joined', 'joins'], ['Candidates rejected', 'rejected']];
+    const headers = days.map(item => `<th>${item.date.toLocaleDateString(undefined, { weekday: 'short' })}<small>${item.date.getDate()} ${item.date.toLocaleDateString(undefined, { month: 'short' })}${item.date.getDay() === 6 ? `<br>${item.target ? 'Half day · target 2' : 'Off day'}` : item.date.getDay() === 0 ? '<br>Off day' : '<br>Target 4 shares'}</small></th>`).join('');
+    const rows = labels.map(([label, key]) => {
+      const cells = daily.map(item => key === 'shares'
+        ? `<td><strong class="recruiter-day-count ${item.target === 0 ? 'off' : item.shares >= item.target ? 'met' : ''}">${item.shares}</strong><small>${item.target ? `of ${item.target}` : 'Off'}</small></td>`
+        : `<td>${item[key]}</td>`).join('');
+      const total = key === 'shares' ? report.shares : key === 'interviews' ? report.interviews : report[key].size;
+      const totalCell = key === 'shares' ? `<strong class="recruiter-week-target">${total} / ${shareTarget}</strong>` : `<strong>${total}</strong>`;
+      return `<tr><th scope="row">${label}</th>${cells}<td class="recruiter-week-total">${totalCell}</td></tr>`;
+    }).join('');
+    return `<article class="recruiter-weekly-card recruiter-monthly-card"><div class="recruiter-weekly-card-heading"><h4>${escapeHTML(recruiter.name)} · ${escapeHTML(title)}</h4><span>Shares: ${report.shares} / ${shareTarget} monthly target</span></div><div class="recruiter-monthly-progress" role="img" aria-label="${sharePercent}% of monthly share target reached"><i style="width:${sharePercent}%"></i></div><div class="recruiter-monthly-metrics">${metrics.map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join('')}</div><div class="table-wrap recruiter-monthly-table-wrap"><table class="recruiter-weekly-table"><thead><tr><th>Monthly metric</th>${headers}<th>Month total</th></tr></thead><tbody>${rows}</tbody></table></div></article>`;
+  }).join('');
+}
+function renderRecruiterAnalytics() {
+  const people = new Map();
+  const ensure = name => {
+    const label = String(name || '').trim(); if (!label) return null;
+    const key = label.toLocaleLowerCase();
+    if (!people.has(key)) people.set(key, { name: label, cvShares: 0, profiles: new Set(), shortlisted: new Set(), interviews: 0, selected: new Set(), rejected: new Set() });
+    return people.get(key);
+  };
+  candidates.forEach(candidate => {
+    ensure(candidate.recruiter);
+    (candidate.interviews || []).forEach(interview => ensure(interview.recruiter));
+  });
+  cvShares.forEach(share => ensure(share.recruiter));
+  weeklyReports.forEach(report => ensure(report.recruiter));
+  recruiterDirectory.forEach(person => ensure(person.name));
+  const stageEvents = candidate => candidateEvents(candidate);
+  cvShares.forEach(share => {
+    const row = ensure(share.recruiter); if (!row || !dateFilterMatch(cvShareDate(share))) return;
+    row.cvShares++;
+    row.profiles.add(recruiterIdentity(share));
+  });
+  candidates.forEach(candidate => {
+    const identity = recruiterIdentity(candidate, 'name');
+    if (candidate.sharedDate && dateFilterMatch(candidate.sharedDate)) ensure(candidate.recruiter)?.profiles.add(identity);
+    const events = stageEvents(candidate);
+    for (const event of events) {
+      if (!dateFilterMatch(event.at || event.date)) continue;
+      const row = ensure(event.recruiter || candidate.recruiter); if (!row) continue;
+      if (event.stage === 'Shortlisted') row.shortlisted.add(candidate.id);
+      if (['Offer', 'Joining', 'Joined'].includes(event.stage)) row.selected.add(candidate.id);
+      if (event.stage === 'Rejected') row.rejected.add(candidate.id);
+    }
+    const legacyInterview = candidate.interviewDate || candidate.interviewMode || candidate.interviewStatus || candidate.company || candidate.role
+      ? [{ date: candidate.interviewDate, recruiter: candidate.recruiter, mode: candidate.interviewMode, candidateStatus: candidate.interviewStatus, clientStatus: candidate.clientStatus }]
+      : [];
+    const interviewRows = candidate.interviews?.length ? candidate.interviews : legacyInterview;
+    interviewRows.forEach(interview => {
+      const row = ensure(interview.recruiter || candidate.recruiter);
+      const interviewDate = normalizedDateKey(interview.date || candidate.interviewDate);
+      if (row && interviewDate && interviewDate <= localDateKey(new Date()) && dateFilterMatch(interviewDate)) row.interviews++;
+    });
+  });
+  const rows = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const selectedRecruiter = $('#recruiterFilter')?.value || '';
+  const visibleRows = selectedRecruiter ? rows.filter(row => row.name.toLocaleLowerCase() === selectedRecruiter.toLocaleLowerCase()) : rows;
+  const totals = visibleRows.reduce((sum, row) => ({ cvShares: sum.cvShares + row.cvShares, profiles: sum.profiles + row.profiles.size, shortlisted: sum.shortlisted + row.shortlisted.size, interviews: sum.interviews + row.interviews, selected: sum.selected + row.selected.size, rejected: sum.rejected + row.rejected.size }), { cvShares: 0, profiles: 0, shortlisted: 0, interviews: 0, selected: 0, rejected: 0 });
+  const metricCards = [['CVs shared', totals.cvShares], ['Profiles shared', totals.profiles], ['Shortlisted', totals.shortlisted], ['Interviews conducted', totals.interviews], ['Selected / offered', totals.selected], ['Rejected', totals.rejected]];
+  $('#recruiterAnalyticsMetrics').innerHTML = metricCards.map(([label, value]) => `<article class="recruiter-analytics-metric"><span>${label}</span><strong>${value}</strong></article>`).join('');
+  if (!rows.length || !visibleRows.length) { $('#recruiterAnalytics').innerHTML = `<div class="empty-state compact"><strong>${selectedRecruiter ? 'No activity for this recruiter in the selected period' : 'No recruiter records yet'}</strong><p>${selectedRecruiter ? 'Change the date filters or choose another recruiter.' : 'Assign recruiters to candidates or CV shares to start building recruiter-wise totals.'}</p></div>`; renderRecruiterWeekly(visibleRows); renderRecruiterMonthly(visibleRows); return; }
+  const metrics = [['CV shares', 'cvShares'], ['Shortlisted', 'shortlisted'], ['Interviews conducted', 'interviews'], ['Selected', 'selected'], ['Rejected', 'rejected']];
+  const maxByMetric = Object.fromEntries(metrics.map(([, key]) => [key, Math.max(1, ...visibleRows.map(row => key === 'shortlisted' || key === 'selected' || key === 'rejected' ? row[key].size : key === 'interviews' ? row.interviews : row.cvShares))]));
+  $('#recruiterAnalytics').innerHTML = visibleRows.map(row => {
+    const values = { cvShares: row.cvShares, profiles: row.profiles.size, shortlisted: row.shortlisted.size, interviews: row.interviews, selected: row.selected.size, rejected: row.rejected.size };
+    const bars = metrics.map(([label, key]) => `<div class="recruiter-analytics-bar"><span>${label}</span><div class="riq-bar"><i style="width:${Math.round(values[key] / maxByMetric[key] * 100)}%"></i></div><strong>${values[key]}</strong></div>`).join('');
+    const details = selectedRecruiter ? renderRecruiterRecordDetails(row.name) : '';
+    return `<article class="recruiter-analytics-card"><div class="recruiter-analytics-head"><h3>${escapeHTML(row.name)}</h3><span>${values.profiles} unique profiles shared</span></div><div class="recruiter-analytics-counts"><div><span>CV shares</span><strong>${values.cvShares}</strong></div><div><span>Shortlisted</span><strong>${values.shortlisted}</strong></div><div><span>Interviews</span><strong>${values.interviews}</strong></div><div><span>Selected</span><strong>${values.selected}</strong></div><div><span>Rejected</span><strong>${values.rejected}</strong></div></div><div class="recruiter-analytics-bars">${bars}</div>${details}</article>`;
+  }).join('');
+  renderRecruiterWeekly(visibleRows);
+  renderRecruiterMonthly(visibleRows);
+}
+function renderRecruiterRecordDetails(name) {
+  const matches = value => String(value || '').trim().toLocaleLowerCase() === name.toLocaleLowerCase();
+  const shares = cvShares.filter(share => matches(share.recruiter) && dateFilterMatch(cvShareDate(share)));
+  const statusRows = candidates.flatMap(candidate => {
+    const events = candidateEvents(candidate);
+    return events.filter(event => matches(event.recruiter || candidate.recruiter) && dateFilterMatch(event.at || event.date)).map(event => ({ date: event.at || event.date, candidate: candidate.name, company: candidate.company, profile: candidate.role, status: event.stage }));
+  }).sort((a, b) => compareDates(a.date, b.date));
+  const interviewRows = candidates.flatMap(candidate => {
+    const entries = candidate.interviews?.length ? candidate.interviews : (candidate.interviewDate || candidate.interviewStatus ? [{ date: candidate.interviewDate, recruiter: candidate.recruiter, candidateStatus: candidate.interviewStatus, clientStatus: candidate.clientStatus }] : []);
+    return entries.filter(interview => matches(interview.recruiter || candidate.recruiter) && dateFilterMatch(interview.date || candidate.interviewDate)).map(interview => ({ date: interview.date || candidate.interviewDate, candidate: candidate.name, company: interview.company || candidate.company, profile: interview.role || candidate.role, status: [interview.candidateStatus, interview.clientStatus, interview.finalCall].filter(Boolean).join(' · ') }));
+  }).sort((a, b) => compareDates(a.date, b.date));
+  const table = (title, rows, fields) => `<section class="recruiter-detail-group"><h4>${title} <span>${rows.length}</span></h4>${rows.length ? `<div class="table-wrap"><table><thead><tr>${fields.map(([label]) => `<th>${label}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${fields.map(([, key]) => `<td>${escapeHTML(key === 'date' ? (row[key] ? displayDate(row[key]) : '”?') : row[key] || '”?')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : '<p class="recruiter-detail-empty">No matching records in this period.</p>'}</section>`;
+  const shareRows = shares.map(share => ({ date: cvShareDate(share), candidate: share.candidateName, company: share.company, profile: share.role || share.designation, status: share.shareStatus }));
+  return `<details class="recruiter-record-details"><summary>View all recruiter records</summary>${table('CV shares', shareRows, [['Date', 'date'], ['Candidate', 'candidate'], ['Company', 'company'], ['Profile', 'profile'], ['Share status', 'status']])}${table('Candidate status history', statusRows, [['Date', 'date'], ['Candidate', 'candidate'], ['Company', 'company'], ['Profile', 'profile'], ['Status', 'status']])}${table('Interview records', interviewRows, [['Date', 'date'], ['Candidate', 'candidate'], ['Company', 'company'], ['Profile', 'profile'], ['Outcome', 'status']])}</details>`;
+}
 function renderTrackers() {
   const interviewQuery = trackerSearch('interviews');
   const interviewRows = candidates.flatMap(c => {
     const entries = c.interviews?.length ? c.interviews : [{ date: c.interviewDate, company: c.company, role: c.role, recruiter: c.recruiter, mode: c.interviewMode, time: c.interviewTime, candidateStatus: c.interviewStatus, clientStatus: c.clientStatus, email: c.email, phone: c.phone, contactDetails: c.contactDetails, remarks: c.remarks || c.feedback }];
     return entries.map(entry => ({ candidate: c, entry }));
-  }).filter(({ candidate: c, entry: i }) => dateFilterMatch(candidateDate(c, i)) && candidateMatch({ ...c, company: i.company || c.company, role: i.role || c.role, recruiter: i.recruiter || c.recruiter, stage: i.candidateStatus || c.stage, feedback: i.remarks || c.feedback, remarks: i.clientStatus || c.clientStatus }, interviewQuery));
+  }).filter(({ candidate: c, entry: i }) => dateFilterMatch(candidateDate(c, i)) && recruiterFilterMatches(i.recruiter || c.recruiter) && candidateMatch({ ...c, company: i.company || c.company, role: i.role || c.role, recruiter: i.recruiter || c.recruiter, stage: i.candidateStatus || c.stage, feedback: i.remarks || c.feedback, remarks: i.clientStatus || c.clientStatus }, interviewQuery));
   sortByDate(interviewRows);
   $('#interviewRows').innerHTML = interviewRows.map(({ candidate: c, entry: i }) => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.name)}${td(i.recruiter || c.recruiter)}${td(i.date || c.interviewDate)}${td(i.company || c.company)}${td(i.role || c.role)}${td(i.mode || c.interviewMode)}${td(i.time || c.interviewTime)}<td>${stageSelect(c)}<small class="raw-status">${escapeHTML(i.candidateStatus || '')}</small></td>${td(i.clientStatus || c.clientStatus)}${td(i.contactDetails || [i.email || c.email, i.phone || c.phone].filter(Boolean).join(' · '))}${td(i.remarks || c.remarks || c.feedback)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
   $('#interviewEmpty').hidden = interviewRows.length > 0;
   const offerQuery = trackerSearch('offers');
-  const offerCandidates = candidates.filter(c => ['Shortlisted', 'Offer', 'Joining'].includes(c.stage) && dateFilterMatch(offerDate(c)) && candidateMatch(c, offerQuery));
+  const offerCandidates = candidates.filter(c => ['Shortlisted', 'Offer', 'Joining'].includes(c.stage) && dateFilterMatch(offerDate(c)) && candidateMatchesRecruiter(c) && candidateMatch(c, offerQuery));
   offerCandidates.sort((a, b) => compareDates(offerDate(a), offerDate(b)));
   $('#offerRows').innerHTML = offerCandidates.map(c => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.recruiter)}${td(c.month || c.doj?.slice(0, 7) || c.createdAt?.slice(0, 7))}${td(c.company)}${td(c.role)}${td(c.name)}<td>${stageSelect(c)}</td>${td(c.finalCall)}${td(c.doj)}${td(c.remarks || c.interviews?.at(-1)?.remarks)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
   $('#offerEmpty').hidden = offerCandidates.length > 0;
   const joinedQuery = trackerSearch('joined');
-  const joinedCandidates = candidates.filter(c => ['Joined', 'Joining'].includes(c.stage) && dateFilterMatch(offerDate(c)) && candidateMatch(c, joinedQuery));
+  const joinedCandidates = candidates.filter(c => ['Joined', 'Joining'].includes(c.stage) && dateFilterMatch(offerDate(c)) && candidateMatchesRecruiter(c) && candidateMatch(c, joinedQuery));
   joinedCandidates.sort((a, b) => compareDates(offerDate(a), offerDate(b)));
   $('#joinedRows').innerHTML = joinedCandidates.map(c => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.recruiter)}${td(c.month || c.doj?.slice(0, 7) || c.createdAt?.slice(0, 7))}${td(c.company)}${td(c.role)}${td(c.name)}<td>${stageSelect(c)}</td>${td(c.doj)}${td(c.remarks || c.interviews?.at(-1)?.remarks)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
   $('#joinedEmpty').hidden = joinedCandidates.length > 0;
   renderCvShares();
+  renderImportedShareHistory();
   renderWeekly();
+  renderRecruiterAnalytics();
   syncSelectionUI();
 }
 function renderCvShares() {
   if (!$('#cvShareRows')) return;
   const query = trackerSearch('cvshares');
   const fields = ['recruiter', 'shareStatus', 'company', 'role', 'candidateName', 'designation', 'location', 'workLocation', 'experience', 'currentCompany', 'currentCtc', 'expectedCtc', 'noticePeriod', 'remarks', 'phone', 'email'];
-  const rows = cvShares.filter(share => dateFilterMatch(cvShareDate(share)) && fields.some(field => String(share[field] || '').toLowerCase().includes(query)));
+  const rows = cvShares.filter(share => dateFilterMatch(cvShareDate(share)) && recruiterFilterMatches(share.recruiter) && fields.some(field => String(share[field] || '').toLowerCase().includes(query)));
   rows.sort((a, b) => compareDates(cvShareDate(a), cvShareDate(b)));
   const pageSize = 200, pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   cvSharePage = Math.min(cvSharePage, pageCount - 1);
@@ -375,7 +749,7 @@ function renderCvShares() {
   visibleCvSharePageIds = pageRows.map(share => share.id);
   const dateCounts = new Map();
   rows.forEach(share => { const date = cvShareDate(share); dateCounts.set(date, (dateCounts.get(date) || 0) + 1); });
-  const cell = value => `<td>${escapeHTML(value || '—')}</td>`;
+  const cell = value => `<td>${escapeHTML(value || '”?')}</td>`;
   let lastDate = null;
   $('#cvShareRows').innerHTML = pageRows.map(share => {
     const date = cvShareDate(share), band = date !== lastDate ? `<tr class="date-band"><th colspan="19">${escapeHTML(date ? displayDate(`${date}T12:00:00`) : 'Date not set')} <span>${dateCounts.get(date)} CV shares</span></th></tr>` : '';
@@ -395,20 +769,65 @@ function renderCvShares() {
   $('#cvShareNextPage').disabled = cvSharePage >= pageCount - 1;
 }
 async function loadCvShares() {
-  try { cvShares = await api('/ta-cv-shares'); const ids = new Set(cvShares.map(share => share.id)); for (const id of selectedCvShareIds) if (!ids.has(id)) selectedCvShareIds.delete(id); populateYearFilters(); render(); }
+  try { cvShares = await api('/ta-cv-shares'); const ids = new Set(cvShares.map(share => share.id)); for (const id of selectedCvShareIds) if (!ids.has(id)) selectedCvShareIds.delete(id); for (const id of selectedImportedShareIds) if (!ids.has(id)) selectedImportedShareIds.delete(id); populateYearFilters(); render(); }
   catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
+}
+function renderImportedShareHistory() {
+  const root = $('#importedShareRows');
+  if (!root) return;
+  const query = trackerSearch('importedshares'), fields = ['recruiter', 'company', 'role', 'candidateName', 'location', 'workLocation', 'experience', 'shareStatus', 'email', 'phone'];
+  const rows = cvShares.filter(share => share.imported && dateFilterMatch(cvShareDate(share)) && recruiterFilterMatches(share.recruiter) && fields.some(field => String(share[field] || '').toLocaleLowerCase().includes(query)));
+  rows.sort((a, b) => compareDates(cvShareDate(a), cvShareDate(b)));
+  const pageSize = 200, pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  importedSharePage = Math.min(importedSharePage, pages - 1);
+  const pageRows = rows.slice(importedSharePage * pageSize, (importedSharePage + 1) * pageSize);
+  visibleImportedSharePageIds = pageRows.map(share => share.id);
+  root.innerHTML = pageRows.map(share => `<tr><td><input type="checkbox" data-imported-share-select="${escapeHTML(share.id)}" aria-label="Select imported CV share for ${escapeHTML(share.candidateName)}" ${selectedImportedShareIds.has(share.id) ? 'checked' : ''}></td><td>${escapeHTML(share.sharedAt || '-')}</td><td>${escapeHTML(share.recruiter || '-')}</td><td>${escapeHTML(share.company || '-')}</td><td>${escapeHTML(share.role || share.designation || '-')}</td><td>${escapeHTML(share.candidateName || '-')}</td><td>${escapeHTML(share.location || share.workLocation || '-')}</td><td>${escapeHTML(share.experience || '-')}</td><td>${escapeHTML(share.shareStatus || '-')}</td><td><div class="row-actions"><button class="action-button" type="button" data-edit-imported-share="${escapeHTML(share.id)}">Edit</button><button class="action-button delete" type="button" data-delete-imported-share="${escapeHTML(share.id)}">Delete</button></div></td></tr>`).join('');
+  $('#importedShareRecordCount').textContent = `${rows.length} imported CV share row${rows.length === 1 ? '' : 's'}`;
+  $('#importedShareEmpty').hidden = rows.length > 0;
+  const selectedVisible = pageRows.filter(share => selectedImportedShareIds.has(share.id)).length;
+  $('#selectAllImportedShares').checked = pageRows.length > 0 && selectedVisible === pageRows.length;
+  $('#selectAllImportedShares').indeterminate = selectedVisible > 0 && selectedVisible < pageRows.length;
+  $('#selectAllImportedShares').disabled = pageRows.length === 0;
+  $('#selectedImportedShareCount').textContent = selectedImportedShareIds.size;
+  $('#importedShareBulkActions').hidden = selectedImportedShareIds.size === 0;
+  $('#importedSharePagination').hidden = rows.length <= pageSize;
+  $('#importedSharePageSummary').textContent = `${rows.length ? importedSharePage * pageSize + 1 : 0} - ${Math.min((importedSharePage + 1) * pageSize, rows.length)} of ${rows.length}`;
+  $('#importedSharePrevPage').disabled = importedSharePage === 0;
+  $('#importedShareNextPage').disabled = importedSharePage >= pages - 1;
 }
 function localDateKey(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
 function mondayFor(date) { const result = new Date(date.getFullYear(), date.getMonth(), date.getDate()); result.setDate(result.getDate() - ((result.getDay() + 6) % 7)); return result; }
 function selectedWeekDays() { const [year, month, day] = $('#weekStart').value.split('-').map(Number); const monday = new Date(year, month - 1, day); return TA_DAYS.map((_, i) => { const d = new Date(monday); d.setDate(d.getDate() + i); return localDateKey(d); }); }
 function candidateEvents(candidate) {
-  return candidate.statusHistory || [];
+  const events = (candidate.statusHistory || []).map(event => ({ ...event, recruiter: event.recruiter || candidate.recruiter }));
+  const datedStages = [
+    { stage: 'Shortlisted', date: candidate.shortlistedDate },
+    { stage: 'Offer', date: candidate.offeredDate },
+    { stage: candidate.stage === 'Joined' ? 'Joined' : 'Joining', date: candidate.doj },
+    { stage: 'Rejected', date: candidate.rejectedDate }
+  ];
+  for (const item of datedStages) {
+    const date = normalizedDateKey(item.date);
+    if (date && !events.some(event => event.stage === item.stage && normalizedDateKey(event.at || event.date) === date)) events.push({ stage: item.stage, at: `${date}T12:00:00`, recruiter: candidate.recruiter });
+  }
+  return events;
 }
 function metricCandidates(recruiter, metric, dateKey) {
   const matchesRecruiter = value => String(value || '').toLowerCase() === recruiter.toLowerCase();
   if (metric === TA_METRICS[0]) return cvShares.filter(share => matchesRecruiter(share.recruiter) && normalizedDateKey(share.sharedAt) === dateKey);
-  const stage = metric === TA_METRICS[1] ? 'Shortlisted' : metric === TA_METRICS[2] ? 'Offer' : 'Joining';
-  return candidates.filter(c => candidateEvents(c).some(e => matchesRecruiter(e.recruiter || c.recruiter) && e.stage === stage && normalizedDateKey(e.at || e.date) === dateKey));
+  const stages = metric === TA_METRICS[1] ? ['Shortlisted'] : metric === TA_METRICS[2] ? ['Offer'] : ['Joining', 'Joined'];
+  return candidates.filter(candidate => {
+    const eventMatch = candidateEvents(candidate).some(event => matchesRecruiter(event.recruiter || candidate.recruiter) && stages.includes(event.stage) && normalizedDateKey(event.at || event.date) === dateKey);
+    if (eventMatch) return true;
+    const datedStages = [
+      { stage: 'Shortlisted', date: candidate.shortlistedDate },
+      { stage: 'Offer', date: candidate.offeredDate },
+      { stage: 'Joining', date: candidate.doj }
+    ];
+    if (matchesRecruiter(candidate.recruiter) && datedStages.some(item => stages.includes(item.stage) && normalizedDateKey(item.date) === dateKey)) return true;
+    return false;
+  });
 }
 function renderWeekly() {
   if (!$('#weeklyRows')) return;
@@ -416,14 +835,16 @@ function renderWeekly() {
   candidates.forEach(c => [c.recruiter, ...(c.interviews || []).map(i => i.recruiter)].filter(Boolean).forEach(name => { if (name.trim()) recruiters.set(name.toLowerCase(), name.trim()); }));
   cvShares.forEach(share => { if (share.recruiter?.trim()) recruiters.set(share.recruiter.toLowerCase(), share.recruiter.trim()); });
   weeklyReports.forEach(r => recruiters.set(r.recruiter.toLowerCase(), r.recruiter));
+  recruiterDirectory.forEach(person => recruiters.set(person.name.toLocaleLowerCase(), person.name));
   const days = selectedWeekDays();
-  $('#weeklyRows').innerHTML = [...recruiters.values()].sort((a, b) => a.localeCompare(b)).map(recruiter => {
+  const selected = $('#recruiterFilter')?.value || '';
+  $('#weeklyRows').innerHTML = [...recruiters.values()].filter(name => !selected || name.toLocaleLowerCase() === selected.toLocaleLowerCase()).sort((a, b) => a.localeCompare(b)).map(recruiter => {
     const report = weeklyReports.find(r => r.recruiter.toLowerCase() === recruiter.toLowerCase());
     const metricRows = TA_METRICS.map(metric => `<tr><th scope="row">${escapeHTML(metric)}</th>${days.map((dayKey, index) => {
       const day = TA_DAYS[index], people = dateFilterMatch(dayKey) ? metricCandidates(recruiter, metric, dayKey) : [];
       const cell = report?.manual?.[metric]?.[day] || {};
       const target = metric === TA_METRICS[0] ? 4 : Number(cell.target) || '';
-      const result = metric === TA_METRICS[3] ? people.map(c => c.name).join(', ') || '—' : String(people.length);
+      const result = metric === TA_METRICS[3] ? people.map(c => c.name).join(', ') || '”?' : String(people.length);
       const ratio = metric === TA_METRICS[0] ? `${Math.round(people.length / 4 * 100)}%` : '';
       const achievement = Number(cell.achievement) || 0;
       const met = achievement >= (Number(target) || 0);
@@ -432,6 +853,7 @@ function renderWeekly() {
     }).join('')}</tr>`).join('');
     return `<section class="recruiter-week"><div class="recruiter-week-heading"><h3>${escapeHTML(recruiter)}</h3><button class="action-button delete" type="button" data-remove-recruiter="${escapeHTML(recruiter)}">Remove</button></div><div class="table-wrap"><table class="weekly-table"><thead><tr><th>Metric</th>${TA_DAYS.map((day, i) => `<th>${day}<small>${days[i].slice(5)}</small></th>`).join('')}</tr></thead><tbody>${metricRows}</tbody></table></div></section>`;
   }).join('') || '<div class="empty-state compact"><strong>No recruiters yet</strong><p>Add a recruiter or assign candidates to a recruiter in their profile.</p></div>';
+  renderRecruiterAnalytics();
 }
 async function loadWeekly() {
   try { weeklyReports = await api(`/ta-weekly?week=${encodeURIComponent($('#weekStart').value)}`); renderWeekly(); }
@@ -469,6 +891,7 @@ async function submitCvShare(event) {
   delete values.id;
   const button = $('#saveCvShare'); button.disabled = true;
   try {
+    values.recruiter = await saveRecruiterName(values.recruiter);
     await api(id ? `/ta-cv-shares/${encodeURIComponent(id)}` : '/ta-cv-shares', id ? 'PUT' : 'POST', values);
     $('#cvShareDialog').close(); await loadCvShares();
     $('#workspaceMessage').textContent = id ? 'CV share updated.' : 'CV share saved.'; $('#workspaceMessage').hidden = false;
@@ -477,7 +900,7 @@ async function submitCvShare(event) {
 }
 function pastedShareDate(value) {
   const input = String(value || '').replace(/[\u200B\uFEFF]/g, '').trim();
-  if (!input || /^[-–—n/a]+$/i.test(input)) return '';
+  if (!input || /^[-–”?n/a]+$/i.test(input)) return '';
   if (/^\d{4,6}(?:\.\d+)?$/.test(input)) {
     const serial = Number(input);
     if (serial >= 20000 && serial <= 100000) {
@@ -575,7 +998,7 @@ async function importPastedCvShares(event) {
   try {
     const result = await api('/ta-cv-shares/import', 'POST', { rows });
     $('#pasteCvSharesDialog').close(); textarea.value = '';
-    await loadCvShares();
+    await loadCvShares(); await loadRecruiters();
     $('#workspaceMessage').textContent = `Paste import complete: ${result.imported} imported, ${result.repaired || 0} corrected, ${result.removedHeaders || 0} shifted header rows removed, ${result.duplicates} duplicates skipped, ${result.blank} blank rows skipped.`;
     $('#workspaceMessage').hidden = false;
   } catch (error) { errorBox.textContent = error.message; }
@@ -648,7 +1071,7 @@ function previewCvSharedRows(grid) {
     if (['sharedAt', 'recruiter', 'candidateName'].every(field => source.map(normalizeHeader).some(value => aliases[field].includes(value)))) continue;
     const record = Object.fromEntries(fields.map(field => [field, String(source[columns[field]] ?? '').trim()]));
     if (!record.candidateName || normalizeHeader(record.candidateName) === 'candidate') continue;
-    if (record.sharedAt && !pastedShareDate(record.sharedAt)) return { rows: [], error: `Excel row ${index + 1} has an invalid Date value: “${record.sharedAt}”.` };
+    if (record.sharedAt && !pastedShareDate(record.sharedAt)) return { rows: [], error: `Excel row ${index + 1} has an invalid Date value: “${record.sharedAt}”?.` };
     record.sharedAt = pastedShareDate(record.sharedAt) || '';
     rows.push(record);
   }
@@ -754,7 +1177,7 @@ async function submitHistoricalImport(names, individual = false) {
     const result = await api('/ta-imports', 'POST', { workbookBase64: importFileBase64, sourceName: importFile?.name || 'Historical workbook', sheets: names });
     const details = result.worksheets.map(sheet => `${sheet.name}: ${sheet.status === 'imported' ? `${sheet.recordsImported} records, ${sheet.candidatesCreated} new candidates, ${sheet.interviewsAdded} interviews` : sheet.status}`).join('\n');
     $('#trackerImportDialog').close();
-    await loadCandidates(); await loadImportReports();
+    await loadCandidates(); await loadCvShares(); await loadImportReports(); await loadRecruiters();
     $('#workspaceMessage').textContent = `Historical import report\n${details}\nTotal: ${result.candidatesCreated} candidates, ${result.interviewsAdded} interview rounds and ${result.cvSharesAdded || 0} CV shares imported; ${result.duplicatesSkipped} exact duplicates skipped. Original worksheet data was archived.`;
     $('#workspaceMessage').hidden = false;
   } catch (error) { $('#importError').textContent = error.message; }
@@ -764,7 +1187,16 @@ let importReports = [];
 async function loadImportReports() {
   try {
     importReports = await api('/ta-imports');
-    $('#historicalImportReports').innerHTML = importReports.map(item => `<article class="historical-import-report"><strong>${escapeHTML(item.sourceName)}</strong><small>${escapeHTML(new Date(item.importedAt).toLocaleString())}</small><span>${(item.report?.worksheets || []).map(sheet => `${escapeHTML(sheet.name)} (${sheet.populatedRows} rows)`).join(' · ')}</span><small>${item.report?.candidatesCreated || 0} candidates · ${item.report?.interviewsAdded || 0} interview rounds · ${item.report?.cvSharesAdded || 0} CV shares · original row/merge structure archived</small><a href="/api/ta-imports/${encodeURIComponent(item.id)}.xlsx">Download archived worksheets</a></article>`).join('') || '<p class="empty-state compact">No historical imports yet.</p>';
+    const existing = new Set(importReports.map(item => item.id));
+    for (const id of selectedImportArchiveIds) if (!existing.has(id)) selectedImportArchiveIds.delete(id);
+    $("#historicalImportReports").innerHTML = importReports.map(item => `<article class="historical-import-report"><label class="archive-select"><input type="checkbox" data-import-archive-select="${escapeHTML(item.id)}" ${selectedImportArchiveIds.has(item.id) ? "checked" : ""} aria-label="Select archived workbook ${escapeHTML(item.sourceName)}"></label><div class="archive-report-main"><strong>${escapeHTML(item.sourceName)}</strong><small>${escapeHTML(new Date(item.importedAt).toLocaleString())}</small><span>${(item.report?.worksheets || []).map(sheet => `${escapeHTML(sheet.name)} (${sheet.populatedRows} rows)`).join(" | ")}</span><small>${item.report?.candidatesCreated || 0} candidates | ${item.report?.interviewsAdded || 0} interview rounds | ${item.report?.cvSharesAdded || 0} CV shares | original workbook archived</small><div class="archive-report-actions"><a href="/api/ta-imports/${encodeURIComponent(item.id)}.xlsx">Download archived workbook</a><button class="action-button" type="button" data-edit-import-archive="${escapeHTML(item.id)}">Rename</button><button class="action-button delete" type="button" data-delete-import-archive="${escapeHTML(item.id)}">Delete archive</button></div></div></article>`).join("") || "<p class=\"empty-state compact\">No historical imports yet.</p>";
+    $("#selectedImportArchiveCount").textContent = selectedImportArchiveIds.size;
+    $("#clearImportArchiveSelection").disabled = selectedImportArchiveIds.size === 0;
+    $("#deleteSelectedImportArchives").disabled = selectedImportArchiveIds.size === 0;
+    $("#selectAllImportArchives").disabled = importReports.length === 0;
+    const visibleIds = importReports.map(item => item.id), selectedVisible = visibleIds.filter(id => selectedImportArchiveIds.has(id)).length;
+    $("#selectAllImportArchives").checked = visibleIds.length > 0 && selectedVisible === visibleIds.length;
+    $("#selectAllImportArchives").indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
   } catch { /* Reports are optional until an import has been saved. */ }
 }
 $('#importTracker').addEventListener('click', () => { $('#trackerImportForm').reset(); $('#trackerImportFile').value = ''; $('#importError').textContent = ''; $('#importWorksheets').hidden = true; importWorkbook = null; importFile = null; importFileBase64 = ''; importSheets = []; activeImportSheet = ''; $('#confirmImport').disabled = true; $('#confirmImportOne').disabled = true; $('#trackerImportDialog').showModal(); });
@@ -790,7 +1222,7 @@ $('#dateSort').value = savedTalentViewState.sort === 'oldest' ? 'oldest' : 'newe
 activateTrackerTab(savedTalentViewState.tab || 'interviews', false);
 document.querySelectorAll('[data-add-candidate]').forEach(button => button.addEventListener('click', addCandidate));
 document.querySelectorAll('[data-export]').forEach(button => button.addEventListener('click', exportExcel));
-document.querySelectorAll('[data-search]').forEach(input => input.addEventListener('input', () => { cvSharePage = 0; renderTrackers(); }));
+document.querySelectorAll('[data-search]').forEach(input => input.addEventListener('input', () => { cvSharePage = 0; importedSharePage = 0; renderTrackers(); }));
 document.querySelectorAll('#interviewRows, #offerRows, #joinedRows').forEach(body => body.addEventListener('change', async event => {
   const select = event.target.closest('select[data-candidate-stage]'); if (!select) return;
   const candidate = candidates.find(c => c.id === select.dataset.candidateStage); if (!candidate) return;
@@ -805,8 +1237,19 @@ document.querySelectorAll('#interviewRows, #offerRows, #joinedRows').forEach(bod
 }));
 $('#weekStart').value = localDateKey(mondayFor(new Date()));
 $('#weekStart').addEventListener('change', () => { const date = new Date(`${$('#weekStart').value}T00:00:00`); if (!Number.isNaN(date.getTime())) { $('#weekStart').value = localDateKey(mondayFor(date)); loadWeekly(); } });
-$('#addRecruiter').addEventListener('click', () => { const name = prompt('Recruiter / TA name'); if (!name?.trim()) return; const key = name.trim().toLowerCase(); if (!weeklyReports.some(r => r.recruiter.toLowerCase() === key) && !candidates.some(c => c.recruiter?.toLowerCase() === key)) weeklyReports.push({ id: `draft-${Date.now()}`, weekStart: $('#weekStart').value, recruiter: name.trim(), manual: {} }); renderWeekly(); });
+$('#recruiterMonth').value = localDateKey(new Date()).slice(0, 7);
+$('#recruiterMonth').addEventListener('change', () => renderRecruiterAnalytics());
+$('#addRecruiter').addEventListener('click', async () => { const name = prompt('Recruiter / TA name'); if (!name?.trim()) return; try { const savedName = await saveRecruiterName(name); const key = savedName.toLocaleLowerCase(); if (!weeklyReports.some(r => r.recruiter.toLocaleLowerCase() === key)) weeklyReports.push({ id: `draft-${Date.now()}`, weekStart: $('#weekStart').value, recruiter: savedName, manual: {} }); renderWeekly(); renderRecruiterAnalytics(); } catch (error) { $('#weeklyMessage').textContent = error.message; $('#weeklyMessage').hidden = false; } });
 $('#saveWeekly').addEventListener('click', saveWeekly);
+$('#recruiterWeekStart').addEventListener('change', () => {
+  const value = $('#recruiterWeekStart').value;
+  const date = value ? new Date(`${value}T00:00:00`) : new Date();
+  if (Number.isNaN(date.getTime())) return;
+  const monday = mondayFor(date);
+  $('#recruiterWeekStart').value = localDateKey(monday);
+  renderRecruiterAnalytics();
+});
+$('#refreshRecruiterAnalytics').addEventListener('click', async () => { await Promise.all([loadCandidates(), loadCvShares(), loadWeekly()]); renderRecruiterAnalytics(); });
 $('#weeklyRows').addEventListener('input', event => {
   const target = event.target.closest('input[data-field="achievement"][data-metric="Candidate Shared"]');
   if (!target) return;
@@ -822,3 +1265,4 @@ populateStageOptions();
 loadCandidates();
 loadWeekly();
 loadCvShares();
+loadRecruiters();

@@ -10,27 +10,27 @@
 <style>
 :root{
   color-scheme: light;
-  --blue:#3C74B9;--blue-dark:#2C5A93;--navy:#004D75;--teal:#55C9D0;--orange:#FC8C37;
-  --ink:#1B3A55;--muted:#6b7d90;--bg:#f4f8fc;--card:#ffffff;--line:#dde8f2;
-  --soft-blue:#eaf2fb;--good:#008D8F;--warn:#F6E069;--risk:#CD1926;
-  --field-bg:#ffffff;--field-border:#cfdde8;--scale-bg:#fbfdfe;--scale-border:#d6e3ec;
-  --scale-text:#536b7e;--progress-track:#e8f0f5;--chip-bg:#f0f6fa;--priority-bg:#fffaf4;
-  --loading-overlay:rgba(255,255,255,.85);--loading-box:#ffffff;--header-bg:#ffffff;
-  --shadow:0 8px 30px rgba(20,70,100,.05);--menu-shadow:0 16px 40px rgba(20,70,100,.16);
+  --blue:#1b63b9;--blue-dark:#134e94;--navy:#0b1e2c;--teal:#0284c7;--orange:#ea580c;
+  --ink:#142534;--muted:#597184;--bg:#f5f8fc;--card:#ffffff;--line:#d8e4ee;
+  --soft-blue:#eaf3fd;--good:#059669;--warn:#d97706;--risk:#dc2626;
+  --field-bg:#ffffff;--field-border:#c5d7e5;--scale-bg:#f8fafc;--scale-border:#d1e0ec;
+  --scale-text:#476175;--progress-track:#e2edf5;--chip-bg:#eef5fb;--priority-bg:#fff7ed;
+  --loading-overlay:rgba(245,248,252,.88);--loading-box:#ffffff;--header-bg:#ffffff;
+  --shadow:0 10px 30px rgba(20,50,75,.07);--menu-shadow:0 18px 45px rgba(20,50,75,.16);
 }
 :root[data-theme="dark"]{
   color-scheme: dark;
-  --blue:#91d0ee;--blue-dark:#b1e1f3;--navy:#f1f7fa;--teal:#65e0e7;--orange:#ff9a72;
-  --ink:#f1f7fa;--muted:#b7cbd4;--bg:#091a27;--card:#112b3a;--line:#35515e;
-  --soft-blue:#183b4c;--good:#4ed9b6;--warn:#ffd466;--risk:#ff8282;
-  --field-bg:#0d2331;--field-border:#35515e;--scale-bg:#163548;--scale-border:#2a4c60;
-  --scale-text:#c3d8e2;--progress-track:#1c3b4e;--chip-bg:#1b3d52;--priority-bg:#2d261e;
-  --loading-overlay:rgba(9,26,39,.88);--loading-box:#112b3a;--header-bg:#112b3a;
-  --shadow:0 8px 30px rgba(0,0,0,.35);--menu-shadow:0 16px 40px rgba(0,0,0,.45);
+  --blue:#72bbf8;--blue-dark:#9ad1fc;--navy:#f4f8fc;--teal:#38bdf8;--orange:#fb923c;
+  --ink:#f4f8fc;--muted:#a8c1d2;--bg:#091a27;--card:#102636;--line:#27475d;
+  --soft-blue:#14354b;--good:#34d399;--warn:#fbbf24;--risk:#f87171;
+  --field-bg:#0d202e;--field-border:#27475d;--scale-bg:#152f42;--scale-border:#21445b;
+  --scale-text:#cbdfe9;--progress-track:#173447;--chip-bg:#16374c;--priority-bg:#2c221a;
+  --loading-overlay:rgba(9,26,39,.90);--loading-box:#102636;--header-bg:#102636;
+  --shadow:0 10px 30px rgba(0,0,0,.35);--menu-shadow:0 18px 45px rgba(0,0,0,.45);
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{margin:0;font-family:Inter,Arial,Helvetica,sans-serif;background:var(--bg);color:var(--ink)}
+body{margin:0;font-family:"DM Sans",Inter,Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;background:var(--bg);color:var(--ink);transition:background-color .2s,color .2s}
 button,input,select{font:inherit}
 .hidden{display:none!important}
 
@@ -160,7 +160,7 @@ button,input,select{font:inherit}
 .btn:hover{background:var(--blue-dark);transform:translateY(-1px)}
 .btn:disabled{opacity:.6;cursor:not-allowed;transform:none}
 .btn.secondary{background:var(--soft-blue);color:var(--blue)}
-.btn.secondary:hover{background:#ddeaf8}
+.btn.secondary:hover{background:var(--soft-blue)}
 .actions{display:flex;justify-content:space-between;gap:10px;margin-top:20px}
 
 /* progress */
@@ -187,7 +187,7 @@ button,input,select{font:inherit}
 /* results */
 .resultTop{display:grid;grid-template-columns:220px 1fr;gap:24px;align-items:center}
 .score{width:190px;height:190px;border-radius:50%;display:grid;place-items:center;
-  background:conic-gradient(var(--blue) 0deg,#e8f0f5 0deg);position:relative;margin:auto}
+  background:conic-gradient(var(--blue) 0deg,var(--progress-track) 0deg);position:relative;margin:auto}
 .score:after{content:"";position:absolute;width:142px;height:142px;background:var(--card);border-radius:50%}
 .score strong,.score small{position:relative;z-index:1}
 .score strong{font-size:42px;color:var(--navy)}
@@ -250,6 +250,14 @@ button,input,select{font:inherit}
   .scale span{padding:8px 0;font-size:11px}
   .barrow{grid-template-columns:90px 1fr 40px;font-size:12px}
 }
+/* A modest type-size increase across the HR Health Check form and results. */
+body{font-size:16px}
+.theme-toggle,.contactBtn,.btn{font-size:14px}
+.contactItem,.field label,.notice,.counter,.barrow{font-size:14px}
+.scale span{font-size:14px}
+.score small,.chip,.mini,.footer{font-size:13px}
+@media(max-width:420px){.contactBtn{font-size:13.5px}}
+@media(max-width:380px){.scale span{font-size:13px}.barrow{font-size:13px}}
 </style>
 </head>
 <body>

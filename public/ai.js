@@ -231,13 +231,13 @@ async function aiSettingsPanel() {
     <div class="form">
       <div><label>Company Name</label><input id="g_company" value="${esc(s.company)}"></div>
       <div><label>Currency Symbol</label><input id="g_cur" value="${esc(s.currency)}" maxlength="4"></div>
-      <div><label>AI Provider</label><select id="g_provider"><option value="groq" ${(s.ai?.provider || 'groq') === 'groq' ? 'selected' : ''}>Groq (default)</option><option value="openai-compatible" ${s.ai?.provider === 'openai-compatible' ? 'selected' : ''}>OpenAI-compatible provider</option></select></div>
-      <div><label>AI API Key</label><input id="g_key" type="password" value="${esc(s.ai && s.ai.apiKey)}" placeholder="Paste provider API key" autocomplete="new-password"></div>
+      <div><label>AI Provider</label><select id="g_provider"><option value="gemini" ${(s.ai?.provider || 'gemini') === 'gemini' ? 'selected' : ''}>Google Gemini (default)</option><option value="openai-compatible" ${s.ai?.provider === 'openai-compatible' ? 'selected' : ''}>OpenAI-compatible provider</option></select></div>
+      <div><label>AI API Key</label><input id="g_key" type="password" value="${esc(s.ai && s.ai.apiKey)}" placeholder="Paste provider API key (Gemini or OpenAI-compatible)" autocomplete="new-password"></div>
       <div><label>Model (default: ${esc(st.model)})</label><input id="g_model" value="${esc(s.ai && s.ai.model)}" placeholder="${esc(st.model)}"></div>
       <div><label>API Base URL (optional)</label><input id="g_baseUrl" value="${esc(s.ai?.baseUrl || '')}" placeholder="https://api.groq.com/openai/v1"></div>
     </div>
     <div style="background:var(--grey-bg);padding:10px 12px;border-radius:var(--radius-md);margin-top:12px;border:1px solid var(--line);font-size:12px;color:var(--muted);line-height:1.45">
-      <b>Status:</b> ${where} Groq offers a rate-limited Free plan, but usage can be billed if the provider account is upgraded. Check the account tier before use. Model availability and limits can change; choose a model enabled for your account. Get a key at <a href="https://console.groq.com/keys" target="_blank" rel="noopener" style="color:var(--blue)">console.groq.com</a>. Other providers are used only when selected and configured here.
+      <b>Status:</b> ${where} Model availability and limits can change; choose a model enabled for your account. Get a Gemini key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="color:var(--blue)">aistudio.google.com</a>. Other providers are used only when selected and configured here.
     </div>
     <div class="actions">
       <button class="btn" onclick="aiTest(this)">Test AI Connection</button>

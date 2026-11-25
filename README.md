@@ -86,8 +86,8 @@ Settings & Import > Email (SMTP). Gmail: host `smtp.gmail.com`, port `587`, user
 
 Add a client's additional email addresses in the client editor, one per line. CSV/Excel imports can provide multiple addresses in the Email column (separated by commas, semicolons, or slashes) or use an `Email 2` / `Alternate Emails` column.
 
-## AI features (Groq by default)
-Settings & Import > General & AI > select Groq or an OpenAI-compatible provider, set a model and API key, then Test AI Connection. Groq uses `https://api.groq.com/openai/v1` by default; the default model is `openai/gpt-oss-20b`. Or set `GROQ_API_KEY` on the server. The Groq Free plan has rate limits; upgrading the provider account can incur usage charges. No AI API calls occur until a user clicks an AI feature. Configure other providers only when you choose to use them.
+## AI features (Google Gemini by default)
+Settings & Import > General & AI > select Google Gemini or an OpenAI-compatible provider, set a model and API key, then Test AI Connection. Gemini uses `https://generativelanguage.googleapis.com/v1beta/openai` by default; the default model is `gemini-3.5-flash`. Or set `GEMINI_API_KEY` on the server. No AI API calls occur until a user clicks an AI feature. Model availability and limits can change; choose a model enabled for your account.
 
 | Where | What it does |
 |---|---|
@@ -102,7 +102,7 @@ When you use an AI button, the required client details (name, company, contact i
 
 ## Security and backups
 - CRM and Talent Acquisition have separate email/password logins (`CRM_LOGIN_PASSWORD` and `TALENT_LOGIN_PASSWORD`, each at least 12 characters and different). `APP_PASSWORD` signs session tokens and should also be a strong secret. Sessions last 12 hours and use an HttpOnly SameSite cookie; 5 wrong attempts lock the login for 15 minutes. HR Health Check is public; its report submission is rate-limited and stored in the encrypted database.
-- Every record and setting is encrypted at rest with AES-256-GCM using `CRM_ENCRYPTION_KEY`, which is never stored in the database. `GROQ_API_KEY` and other provider keys set in the environment stay outside the database; keys entered in Settings are encrypted with the CRM settings.
+- Every record and setting is encrypted at rest with AES-256-GCM using `CRM_ENCRYPTION_KEY`, which is never stored in the database. `GEMINI_API_KEY` and other provider keys set in the environment stay outside the database; keys entered in Settings are encrypted with the CRM settings.
 - **Settings & Import > Download backup** regularly and store it securely. PostgreSQL mode exports a JSON backup of the CRM data; treat it as sensitive because the export contains decrypted record values. SQLite compatibility mode downloads an encrypted SQLite backup.
 - Behind an HTTPS reverse proxy set `CRM_TRUST_PROXY=1`. Never commit `.env`; `.gitignore` excludes it. Configure environment variables in Render rather than uploading `.env`.
 - If two people edit the same client at once, the later save gets a "changed by someone else" message instead of overwriting. After a PostgreSQL conflict, the server refreshes its cached records so later requests can continue.
@@ -121,7 +121,7 @@ lib/database.js        SQLite compatibility adapter for tests
 lib/database-postgres.js Neon PostgreSQL adapter with encrypted records and version checks
 database/schema.sql    Repeatable Neon schema setup
 lib/tools.js           tasks, deals, templates, reports, CSV export
-lib/ai.js              Groq/OpenAI-compatible AI features and validated RecruitIQ prompts
+lib/ai.js              Gemini/OpenAI-compatible AI features and validated RecruitIQ prompts
 lib/recruit-iq.js      RecruitIQ job, upload, candidate, match and report APIs
 public/portal.html     product selector for CRM, Talent Acquisition, HR Health Check, and RecruitIQ
 public/talent.*        authenticated candidate pipeline

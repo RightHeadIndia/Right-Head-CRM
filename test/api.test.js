@@ -875,13 +875,13 @@ test('WhatsApp credentials are masked and signed inbound webhook replies are rec
   assert.equal(updated.stage, 'replied');
 });
 
-test('AI settings retain the Groq default and mask provider keys', async () => {
-  await call('PUT', '/api/settings', { ai: { provider: 'groq', model: 'openai/gpt-oss-20b', apiKey: 'test-provider-key' } });
+test('AI settings retain the Gemini default and mask provider keys', async () => {
+  await call('PUT', '/api/settings', { ai: { provider: 'gemini', model: 'gemini-3.5-flash', apiKey: 'test-provider-key' } });
   const settings = (await call('GET', '/api/settings')).json;
-  assert.equal(settings.ai.provider, 'groq');
+  assert.equal(settings.ai.provider, 'gemini');
   assert.equal(settings.ai.apiKey, '********');
   const status = (await call('GET', '/api/ai/status')).json;
-  assert.equal(status.provider, 'groq');
+  assert.equal(status.provider, 'gemini');
   await call('PUT', '/api/settings', { ai: { apiKey: '' } });
 });
 

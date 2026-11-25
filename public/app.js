@@ -633,7 +633,7 @@ async function renderMail() {
         <div id="m_client_choices" class="mail-client-picker"></div>
         <div class="note">Red Zone and opted-out clients are excluded. You can select clients from any other stage.</div>
       </div>
-      <label id="m_numbered_followup_option" class="mail-thread-option" style="display:none;margin-top:12px"><input id="m_numbered_followups" type="checkbox" onchange="toggleNumberedFollowups()"> Use a different message for each client’s next reminder number (#1–#4)</label>
+      <label id="m_numbered_followup_option" class="mail-thread-option" style="margin-top:12px"><input id="m_numbered_followups" type="checkbox" onchange="toggleNumberedFollowups()"> Send as a due reminder (#1–#4) to eligible recipients in this audience</label>
       <div id="m_numbered_followup_editor" class="full" style="display:none"></div>
       <div id="m_standard_composer">
         <label>Start from a template</label>
@@ -693,10 +693,10 @@ function changeMailAudience() {
   const selection = $('#m_selection');
   if (selection) selection.style.display = audience === 'selected' ? '' : 'none';
   const numberedOption = $('#m_numbered_followup_option');
-  if (numberedOption) numberedOption.style.display = ['selected', 'due_followups'].includes(audience) ? '' : 'none';
+  if (numberedOption) numberedOption.style.display = '';
   const numberedEditor = $('#m_numbered_followup_editor');
-  if (numberedEditor && !['selected', 'due_followups'].includes(audience)) numberedEditor.style.display = 'none';
-  if (['selected', 'due_followups'].includes(audience) && $('#m_numbered_followups')?.checked) renderNumberedFollowupEditors();
+  if (numberedEditor && !$('#m_numbered_followups')?.checked) numberedEditor.style.display = 'none';
+  if ($('#m_numbered_followups')?.checked) renderNumberedFollowupEditors();
   updateMailComposerVisibility();
   if (audience === 'selected') renderMailSelection();
   audCount();
@@ -704,7 +704,7 @@ function changeMailAudience() {
 function updateMailComposerVisibility() {
   const dueFollowups = $('#m_aud')?.value === 'due_followups';
   const sequence = $('#m_sequence')?.checked;
-  const numberedFollowups = $('#m_numbered_followups')?.checked && ['selected', 'due_followups'].includes($('#m_aud')?.value);
+  const numberedFollowups = $('#m_numbered_followups')?.checked;
   $('#m_standard_composer').style.display = dueFollowups || sequence || numberedFollowups ? 'none' : '';
   $('#m_stage_composers').style.display = dueFollowups && !sequence && !numberedFollowups ? '' : 'none';
   $('#m_save_template').style.display = dueFollowups || sequence || numberedFollowups ? 'none' : '';
@@ -725,8 +725,9 @@ function toggleNumberedFollowups() {
 function renderNumberedFollowupEditors() {
   const box = $('#m_numbered_followup_editor');
   if (!box) return;
-  const dueAudience = $('#m_aud')?.value === 'due_followups';
-  box.innerHTML = `<div class="note">The CRM checks each ${dueAudience ? 'due follow-up client' : 'selected client'}’s email history and next follow-up date${dueAudience ? '' : ', across client stages'}. It sends only the matching reminder to clients who have not replied and are due; others are skipped. Reminder #1 is the first follow-up after the initial email. Messages stay in the existing email thread. Choose a saved template for its message body; the thread subject is kept.</div><div id="m_followup_preview" class="empty">Checking follow-up recipients…</div>${[1, 2, 3, 4].map(number => {
+  const audience = $('#m_aud')?.value || 'all';
+  const audienceLabel = audience === 'selected' ? 'selected clients' : audience === 'due_followups' ? 'clients with follow-ups due' : audience === 'all' ? 'all eligible clients' : `${STAGES[audience] || audience} clients`;
+  box.innerHTML = `<div class="note">The CRM checks ${audienceLabel} for a previous email thread, an unreplied status, and a follow-up date due today or earlier. Only recipients whose next reminder number has a message below will receive it; others are skipped. Reminder #1 follows the initial email. Messages stay in the existing email thread and keep its subject.</div><div id="m_followup_preview" class="empty">Checking follow-up recipients…</div>${[1, 2, 3, 4].map(number => {
     const body = numberedFollowUpDrafts[number] || '';
     return `<section class="panel" style="margin-top:12px">
       <h3>Reminder #${number}</h3>
@@ -741,29 +742,24 @@ async function refreshNumberedFollowupPreview() {
   const box = $('#m_followup_preview');
   if (!box || !$('#m_numbered_followups')?.checked) return;
   const requestId = ++numberedFollowUpPreviewRequest;
-  const dueAudience = $('#m_aud')?.value === 'due_followups';
-  const recipients = dueAudience ? null : getSelectedMailRecipients();
-  if (!dueAudience && !recipients.length) {
+  const audience = $('#m_aud')?.value || 'all';
+  const selectedAudience = audience === 'selected';
+  const recipients = selectedAudience ? getSelectedMailRecipients() : null;
+  if (selectedAudience && !recipients.length) {
     box.textContent = 'Select client email addresses to preview their next due reminder.';
     return;
   }
-  if (dueAudience) {
-    box.textContent = 'Checking clients with due reminders…';
-  }
-  box.textContent = dueAudience ? 'Checking clients with due reminders…' : 'Checking selected recipients…';
+  box.textContent = 'Checking this audience for due reminders…';
   try {
-    const result = await api('/mail/follow-up-preview', 'POST', dueAudience
-      ? { audience: 'due_followups' }
-      : { recipients });
-    if (requestId !== numberedFollowUpPreviewRequest || !$('#m_numbered_followups')?.checked ||
-        !['selected', 'due_followups'].includes($('#m_aud')?.value)) return;
+    const result = await api('/mail/follow-up-preview', 'POST', { audience, ...(recipients ? { recipients } : {}) });
+    if (requestId !== numberedFollowUpPreviewRequest || !$('#m_numbered_followups')?.checked || audience !== $('#m_aud')?.value) return;
     const rows = result.recipients || [];
     const due = rows.filter(item => item.eligible);
     const byNumber = [1, 2, 3, 4].map(number =>
       `${number}: ${due.filter(item => item.nextFollowUpNumber === number).length}`
     ).join(' · ');
     const skipped = rows.filter(item => !item.eligible);
-    box.innerHTML = `<b>${due.length} due and unreplied</b> · ${esc(byNumber)}${result.ignored ? ` · ${result.ignored} unavailable or ineligible` : ''}${skipped.length ? `<details style="margin-top:6px"><summary>${skipped.length} ${dueAudience ? 'client email(s)' : 'selected address(es)'} will be skipped</summary>${skipped.map(item => `<div>${esc(item.clientName)} (${esc(item.email)}): ${esc(item.reason)}</div>`).join('')}</details>` : ''}<div>Only reminder numbers with a message above will be sent.</div>`;
+    box.innerHTML = `<b>${due.length} due and unreplied</b> · ${esc(byNumber)}${result.ignored ? ` · ${result.ignored} unavailable or ineligible` : ''}${skipped.length ? `<details style="margin-top:6px"><summary>${skipped.length} ${selectedAudience ? 'selected address(es)' : 'audience recipient(s)'} will be skipped</summary>${skipped.map(item => `<div>${esc(item.clientName)} (${esc(item.email)}): ${esc(item.reason)}</div>`).join('')}</details>` : ''}<div>Only reminder numbers with a message above will be sent.</div>`;
   } catch (error) {
     if (requestId === numberedFollowUpPreviewRequest) box.textContent = `Could not check follow-ups: ${error.message}`;
   }
@@ -958,11 +954,11 @@ async function sendMail() {
   if (missingStep !== -1) return toast(`Add a subject and message for Email ${missingStep + 1}.`);
   const recipientLabel = audience === 'selected'
     ? `${recipients.length} selected email address(es)`
-    : audience === 'due_followups' ? 'clients with due follow-up reminders' : 'the selected audience';
+    : audience === 'due_followups' ? 'clients with due follow-up reminders' : audience === 'all' ? 'all eligible clients' : `${STAGES[audience] || audience} clients`;
   const replyToLast = numberedFollowups || $('#m_replyToLast')?.checked || false;
   const sendDescription = replyToLast ? ' as numbered replies in each recipient’s last email thread' : '';
   if (!confirm(numberedFollowups
-    ? `Send the configured reminder message to each ${audience === 'due_followups' ? 'due follow-up client' : 'selected recipient'} whose next follow-up number matches? Recipients without a matching saved thread/message or whose reminder is not due will be skipped.`
+    ? `Send the configured reminder message to eligible recipients in ${recipientLabel} whose next reminder number matches? Recipients without a matching saved thread/message or whose reminder is not due will be skipped.`
     : sequence ? `Create this automated email sequence for ${recipientLabel}${sendDescription}? The first email sends when you press Start, then follow-ups send every 48 hours.` : `Send this campaign to ${recipientLabel}${sendDescription} now?`)) return;
   const button = $('#mailSendBtn');
   if (button) button.disabled = true;

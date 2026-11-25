@@ -140,7 +140,7 @@ function sessionProduct(req) {
 function productForPath(pathname) {
   return ['/talent.html', '/talent.css', '/talent.js', '/recruit-iq.html', '/recruit-iq.js'].includes(pathname) || pathname === '/api/recruit-iq' || pathname.startsWith('/api/recruit-iq/') ||
     pathname === '/api/candidates' || pathname.startsWith('/api/candidates/') ||
-    pathname === '/api/ta-weekly' || pathname.startsWith('/api/ta-weekly/') || pathname === '/api/ta-export.xlsx' || pathname === '/api/ta-imports' || pathname.startsWith('/api/ta-imports/') || pathname === '/api/ta-cv-shares' || pathname.startsWith('/api/ta-cv-shares/')
+    pathname === '/api/ta-weekly' || pathname.startsWith('/api/ta-weekly/') || pathname === '/api/ta-recruiters' || pathname.startsWith('/api/ta-recruiters/') || pathname === '/api/ta-export.xlsx' || pathname === '/api/ta-imports' || pathname.startsWith('/api/ta-imports/') || pathname === '/api/ta-cv-shares' || pathname.startsWith('/api/ta-cv-shares/')
     ? 'talent'
     : 'crm';
 }
@@ -382,7 +382,7 @@ function cleanClientInput(value, partial = false) {
 function cleanCandidateInput(value, partial = false) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'candidate data must be an object' };
   const clean = {};
-  const fields = { name: 200, role: 200, email: 254, phone: 50, source: 200, notes: 6000, company: 200, recruiter: 200, month: 10, interviewDate: 30, interviewStatus: 100, interviewMode: 100, interviewTime: 100, clientStatus: 200, contactDetails: 500, feedback: 6000, finalCall: 200, doj: 30, remarks: 6000, sharedDate: 30, shortlistedDate: 30, offeredDate: 30 };
+  const fields = { name: 200, role: 200, email: 254, phone: 50, source: 200, notes: 6000, company: 200, recruiter: 200, month: 10, interviewDate: 30, interviewStatus: 100, interviewMode: 100, interviewTime: 100, clientStatus: 200, contactDetails: 500, feedback: 6000, finalCall: 200, doj: 30, remarks: 6000, sharedDate: 30, shortlistedDate: 30, offeredDate: 30, rejectedDate: 30 };
   for (const [field, max] of Object.entries(fields)) {
     if (value[field] === undefined) continue;
     if (value[field] !== null && typeof value[field] !== 'string') return { error: `${field} must be text` };
@@ -399,12 +399,12 @@ function cleanCandidateInput(value, partial = false) {
   }
   if (value.statusHistory !== undefined) {
     if (!Array.isArray(value.statusHistory) || value.statusHistory.length > 100) return { error: 'status history is not valid' };
-    clean.statusHistory = value.statusHistory.filter(entry => entry && CANDIDATE_STAGES.includes(entry.stage) && typeof entry.at === 'string').map(entry => ({ stage: entry.stage, at: entry.at }));
+    clean.statusHistory = value.statusHistory.filter(entry => entry && CANDIDATE_STAGES.includes(entry.stage) && typeof entry.at === 'string').map(entry => ({ stage: entry.stage, at: entry.at, ...(typeof entry.recruiter === 'string' && entry.recruiter.trim() ? { recruiter: entry.recruiter.trim().slice(0, 200) } : {}) }));
   }
   if (value.imported !== undefined) clean.imported = Boolean(value.imported);
   if (value.interviews !== undefined) {
     if (!Array.isArray(value.interviews) || value.interviews.length > 500) return { error: 'interviews must be an array of at most 500 records' };
-    const interviewFields = { date: 30, company: 200, role: 200, recruiter: 200, mode: 100, time: 100, candidateStatus: 200, clientStatus: 200, email: 254, phone: 50, contactDetails: 500, remarks: 6000, sharedDate: 30, shortlistedDate: 30, offeredDate: 30, doj: 30, finalCall: 200 };
+    const interviewFields = { date: 30, company: 200, role: 200, recruiter: 200, mode: 100, time: 100, candidateStatus: 200, clientStatus: 200, email: 254, phone: 50, contactDetails: 500, remarks: 6000, sharedDate: 30, shortlistedDate: 30, offeredDate: 30, doj: 30, rejectedDate: 30, finalCall: 200 };
     clean.interviews = value.interviews.map(interview => Object.fromEntries(Object.entries(interviewFields).flatMap(([field, max]) => {
       if (interview?.[field] === undefined || interview[field] === null) return [];
       return [[field, String(interview[field]).trim().slice(0, max)]];
@@ -591,7 +591,8 @@ app.post('/api/candidates/import', asyncRoute(async (req, res) => {
     const statusDates = [
       { stage: 'Shortlisted', at: interview.shortlistedDate },
       { stage: 'Offer', at: interview.offeredDate },
-      { stage: 'Joining', at: interview.doj }
+      { stage: 'Joining', at: interview.doj },
+      { stage: 'Rejected', at: interview.rejectedDate }
     ];
     record.statusHistory ||= [];
     let changed = false;
@@ -604,7 +605,7 @@ app.post('/api/candidates/import', asyncRoute(async (req, res) => {
   for (const source of rows) {
     const raw = source && typeof source === 'object' ? source : {};
     const interview = raw.interview && typeof raw.interview === 'object' ? raw.interview : {};
-    const fields = { name: raw.name, company: raw.company || '', recruiter: raw.recruiter || '', email: raw.email || '', phone: raw.phone || '', month: raw.month || '', stage: candidateImportStage(raw.stage), imported: true, sharedDate: interview.sharedDate || '', shortlistedDate: interview.shortlistedDate || '', offeredDate: interview.offeredDate || '', doj: interview.doj || '', finalCall: interview.finalCall || '' };
+    const fields = { name: raw.name, company: raw.company || '', recruiter: raw.recruiter || '', email: raw.email || '', phone: raw.phone || '', month: raw.month || '', stage: candidateImportStage(raw.stage), imported: true, sharedDate: interview.sharedDate || '', shortlistedDate: interview.shortlistedDate || '', offeredDate: interview.offeredDate || '', doj: interview.doj || '', rejectedDate: interview.rejectedDate || '', finalCall: interview.finalCall || '' };
     if (raw.role) fields.role = raw.role;
     const checked = cleanCandidateInput(fields, true);
     const cleanInterview = cleanCandidateInput({ interviews: [interview] }, true);
@@ -631,7 +632,7 @@ app.post('/api/candidates/import', asyncRoute(async (req, res) => {
       if (matchingInterview) {
         for (const [field, value] of Object.entries(incomingInterview)) if (value && !matchingInterview[field]) { matchingInterview[field] = value; enriched = true; }
       }
-      const candidateFields = { sharedDate: incomingInterview.sharedDate, shortlistedDate: incomingInterview.shortlistedDate, offeredDate: incomingInterview.offeredDate, doj: incomingInterview.doj, finalCall: incomingInterview.finalCall };
+      const candidateFields = { sharedDate: incomingInterview.sharedDate, shortlistedDate: incomingInterview.shortlistedDate, offeredDate: incomingInterview.offeredDate, doj: incomingInterview.doj, rejectedDate: incomingInterview.rejectedDate, finalCall: incomingInterview.finalCall };
       for (const [field, value] of Object.entries(candidateFields)) if (value && !record[field]) { record[field] = value; enriched = true; }
       if (clean.stage !== 'Screening' && record.stage !== clean.stage) { record.stage = clean.stage; enriched = true; }
       if (!record.month && clean.month) { record.month = clean.month; enriched = true; }
@@ -652,6 +653,7 @@ app.post('/api/candidates/import', asyncRoute(async (req, res) => {
     if (incomingInterview.shortlistedDate && !record.shortlistedDate) record.shortlistedDate = incomingInterview.shortlistedDate;
     if (incomingInterview.offeredDate && !record.offeredDate) record.offeredDate = incomingInterview.offeredDate;
     if (incomingInterview.doj && !record.doj) record.doj = incomingInterview.doj;
+    if (incomingInterview.rejectedDate && !record.rejectedDate) record.rejectedDate = incomingInterview.rejectedDate;
     if (incomingInterview.finalCall && !record.finalCall) record.finalCall = incomingInterview.finalCall;
     record.interviews = currentInterviews;
     record.interviews.push(incomingInterview);
@@ -671,7 +673,8 @@ app.put('/api/candidates/:id', async (req, res, next) => {
   if (result.error) return res.status(400).json({ error: result.error });
   if (!Object.keys(result.clean).length) return res.status(400).json({ error: 'candidate changes are required' });
   if (result.clean.stage && result.clean.stage !== candidate.stage) {
-    result.clean.statusHistory = [...(candidate.statusHistory || [{ stage: candidate.stage, at: candidate.updatedAt || candidate.createdAt, ...(candidate.recruiter ? { recruiter: candidate.recruiter } : {}) }]), { stage: result.clean.stage, at: now(), ...(candidate.recruiter ? { recruiter: candidate.recruiter } : {}) }].slice(-100);
+    const eventRecruiter = result.clean.recruiter || candidate.recruiter;
+    result.clean.statusHistory = [...(candidate.statusHistory || []), { stage: result.clean.stage, at: now(), ...(eventRecruiter ? { recruiter: eventRecruiter } : {}) }].slice(-100);
   }
   Object.assign(candidate, result.clean, { updatedAt: now() });
   save(db);
@@ -706,6 +709,38 @@ app.delete('/api/candidates/:id', async (req, res, next) => {
 const TA_METRICS = ['Candidate Shared', 'Candidate Shortlisted', 'Candidate Offered', 'Candidate Joined (Name)'];
 const TA_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 function validWeekStart(value) { return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) && new Date(`${value}T00:00:00Z`).getUTCDay() === 1; }
+app.get('/api/ta-recruiters', asyncRoute(async (_req, res) => {
+  const db = load();
+  db.taRecruiters ||= [];
+  const names = [
+    ...db.taRecruiters.map(row => row.name),
+    ...db.candidates.flatMap(candidate => [candidate.recruiter, ...(candidate.interviews || []).map(interview => interview.recruiter)]),
+    ...(db.taCvShares || []).map(share => share.recruiter),
+    db.weeklyReports.map(report => report.recruiter)
+  ].map(value => String(value || '').trim()).filter(Boolean);
+  const existing = new Map(db.taRecruiters.map(row => [String(row.name || '').trim().toLocaleLowerCase(), row]));
+  let changed = false;
+  for (const name of names) {
+    const key = name.toLocaleLowerCase();
+    if (!existing.has(key)) {
+      const record = { id: uid(), name, createdAt: now() };
+      db.taRecruiters.push(record); existing.set(key, record); changed = true;
+    }
+  }
+  if (changed) { save(db); await flush(database); }
+  res.json(db.taRecruiters.slice().sort((a, b) => a.name.localeCompare(b.name)));
+}));
+app.post('/api/ta-recruiters', asyncRoute(async (req, res) => {
+  const name = String(req.body?.name || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+  if (!name) return res.status(400).json({ error: 'Enter the recruiter name.' });
+  const db = load(); db.taRecruiters ||= [];
+  let record = db.taRecruiters.find(row => String(row.name || '').trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+  if (!record) {
+    record = { id: uid(), name, createdAt: now() };
+    db.taRecruiters.push(record); save(db); await flush(database);
+  }
+  res.status(200).json(record);
+}));
 app.get('/api/ta-weekly', (req, res) => {
   const weekStart = String(req.query.week || '');
   if (!validWeekStart(weekStart)) return res.status(400).json({ error: 'Choose a Monday as the week start.' });
@@ -800,6 +835,16 @@ app.post('/api/ta-cv-shares/bulk-delete', asyncRoute(async (req, res) => {
   if (deleted) { save(db); await flush(database); }
   res.json({ deleted });
 }));
+app.post('/api/ta-cv-shares/bulk-update', asyncRoute(async (req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids) || !ids.length || ids.length > 10000 || ids.some(id => typeof id !== 'string')) return res.status(400).json({ error: 'Select between 1 and 10,000 CV shares to update.' });
+  const { clean, error } = cleanCvShareInput({ recruiter: req.body?.recruiter }, true);
+  if (error || !clean.recruiter) return res.status(400).json({ error: error || 'Enter a recruiter name.' });
+  const selected = new Set(ids), db = load(), timestamp = now(); let updated = 0;
+  for (const share of db.taCvShares) if (selected.has(share.id) && share.imported) { share.recruiter = clean.recruiter; share.updatedAt = timestamp; updated++; }
+  if (updated) { save(db); await flush(database); }
+  res.json({ updated });
+}));
 app.put('/api/ta-cv-shares/:id', asyncRoute(async (req, res) => {
   const { clean, error } = cleanCvShareInput(req.body, true);
   if (error) return res.status(400).json({ error });
@@ -817,6 +862,30 @@ app.get('/api/ta-imports', (req, res) => {
   const db = load();
   res.json(db.taHistoricalImports.slice().sort((a, b) => String(b.updatedAt || b.importedAt).localeCompare(String(a.updatedAt || a.importedAt))).map(({ id, sourceName, importedAt, updatedAt, report }) => ({ id, sourceName, importedAt, updatedAt, report })));
 });
+app.delete('/api/ta-imports', asyncRoute(async (req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids) || !ids.length || ids.length > 1000 || ids.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/i.test(id))) return res.status(400).json({ error: 'Select between 1 and 1,000 workbook archives.' });
+  const selected = new Set(ids), db = load(), before = db.taHistoricalImports.length;
+  db.taHistoricalImports = db.taHistoricalImports.filter(item => !selected.has(item.id));
+  const deleted = before - db.taHistoricalImports.length;
+  if (deleted) { save(db); await flush(database); }
+  res.json({ deleted });
+}));
+app.put('/api/ta-imports/:id', asyncRoute(async (req, res) => {
+  const sourceName = String(req.body?.sourceName || '').trim().slice(0, 255);
+  if (!sourceName) return res.status(400).json({ error: 'Enter a workbook archive name.' });
+  const db = load(), archive = db.taHistoricalImports.find(item => item.id === req.params.id);
+  if (!archive) return res.status(404).json({ error: 'Historical workbook was not found.' });
+  archive.sourceName = sourceName; archive.updatedAt = now();
+  save(db); await flush(database);
+  res.json({ id: archive.id, sourceName: archive.sourceName, importedAt: archive.importedAt, updatedAt: archive.updatedAt, report: archive.report });
+}));
+app.delete('/api/ta-imports/:id', asyncRoute(async (req, res) => {
+  const db = load(), before = db.taHistoricalImports.length;
+  db.taHistoricalImports = db.taHistoricalImports.filter(item => item.id !== req.params.id);
+  if (db.taHistoricalImports.length === before) return res.status(404).json({ error: 'Historical workbook was not found.' });
+  save(db); await flush(database); res.json({ ok: true });
+}));
 app.get('/api/ta-imports/:id.xlsx', (req, res) => {
   const archive = load().taHistoricalImports.find(item => item.id === req.params.id);
   if (!archive) return res.status(404).json({ error: 'Historical workbook was not found.' });
@@ -1393,9 +1462,10 @@ app.get('/api/settings', (req, res) => {
     theme: s.theme || 'light',
     ai: {
       model: s.ai.model,
-      provider: s.ai.provider || 'groq',
+      provider: s.ai.provider === 'groq' ? 'gemini' : (s.ai.provider || 'gemini'),
       baseUrl: s.ai.baseUrl || '',
-      apiKey: s.ai.apiKey ? '********' : ''
+      apiKey: s.ai.apiKey ? '********' : '',
+      envKeyConfigured: Boolean(process.env.GEMINI_API_KEY || process.env.AI_API_KEY)
     }
   });
 });
@@ -1441,7 +1511,7 @@ app.put('/api/settings', (req, res) => {
       db.settings.ai.model = b.ai.model.trim();
     }
     if (b.ai.provider !== undefined) {
-      if (!['groq', 'openai-compatible'].includes(b.ai.provider)) return res.status(400).json({ error: 'AI provider must be groq or openai-compatible' });
+      if (!['gemini', 'openai-compatible'].includes(b.ai.provider)) return res.status(400).json({ error: 'AI provider must be gemini or openai-compatible' });
       db.settings.ai.provider = b.ai.provider;
     }
     if (b.ai.baseUrl !== undefined) {
@@ -1694,8 +1764,11 @@ app.get('/api/mail/thread', (req, res) => {
 
 app.post('/api/mail/follow-up-preview', (req, res) => {
   const db = load();
-  const audienceKey = req.body?.audience === 'due_followups' ? 'due_followups' : 'selected';
+  const audienceKey = typeof req.body?.audience === 'string' ? req.body.audience : 'selected';
   const requested = req.body?.recipients;
+  if (!['all', 'selected', 'due_followups', ...STAGES.filter(stage => stage !== 'rejected')].includes(audienceKey)) {
+    return res.status(400).json({ error: 'Choose a valid audience to preview reminders.' });
+  }
   if (audienceKey === 'selected' && (!Array.isArray(requested) || !requested.length)) {
     return res.status(400).json({ error: 'Select at least one client email address.' });
   }
@@ -2478,7 +2551,7 @@ app.post('/api/mail/send', asyncRoute(async (req, res) => {
   const validStages = STAGES.filter(stage => !['onboarded', 'rejected'].includes(stage));
 
   if (useNumberedFollowUpMessages) {
-    if (!['selected', 'due_followups'].includes(key)) return res.status(400).json({ error: 'Numbered follow-up messages require selected clients or due follow-up reminders.' });
+    if (!['all', 'selected', 'due_followups', ...STAGES.filter(stage => stage !== 'rejected')].includes(key)) return res.status(400).json({ error: 'Choose a valid audience for numbered follow-up reminders.' });
     if (useStageMessages) return res.status(400).json({ error: 'Choose numbered reminders or stage-specific reminders, not both.' });
     if (replyToLast !== true) return res.status(400).json({ error: 'Numbered follow-up messages must continue the existing email thread.' });
     if (!followUpMessages || typeof followUpMessages !== 'object' || Array.isArray(followUpMessages) ||

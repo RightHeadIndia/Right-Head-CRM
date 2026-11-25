@@ -1,63 +1,79 @@
 :root {
   color-scheme: light;
-  --page: #f4f8fb;
+  --page: #f5f8fc;
   --surface: #ffffff;
-  --surface-muted: #f8fbfd;
-  --ink: #172d3c;
-  --muted: #526b7a;
-  --subtle: #617985;
-  --line: #d7e3ea;
-  --line-soft: #e8eff3;
-  --brand: #1f61b3;
-  --brand-hover: #194f94;
-  --brand-orange: #b94a24;
-  --brand-soft: #eaf3fc;
-  --brand-border: #bdd2ee;
-  --danger: #a33d36;
-  --danger-bg: #fff0ee;
-  --danger-border: #efc8c3;
-  --shadow: 0 5px 20px rgba(27, 45, 59, .05);
+  --surface-muted: #f8fafc;
+  --ink: #142534;
+  --muted: #597184;
+  --subtle: #6c8395;
+  --line: #d8e4ee;
+  --line-soft: #eaf1f6;
+  --brand: #1b63b9;
+  --brand-hover: #134e94;
+  --brand-orange: #ea580c;
+  --brand-orange-hover: #c2410c;
+  --brand-soft: #eaf3fd;
+  --brand-border: #bcd5f0;
+  --danger: #dc2626;
+  --danger-bg: #fef2f2;
+  --danger-border: #fecaca;
+  --shadow: 0 8px 24px rgba(20, 50, 75, .07);
+  --sidebar: #0b1e2c;
+  --sidebar-line: #1c384a;
+  --sidebar-muted: #a3bad0;
+  --sidebar-active: #15344a;
+  --sidebar-ink: #f4f8fc;
+  --sidebar-brand: #72bbf8;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
   --page: #091a27;
-  --surface: #112b3a;
-  --surface-muted: #173545;
-  --ink: #f1f7fa;
-  --muted: #b7cbd4;
-  --subtle: #a4bac4;
-  --line: #35515e;
-  --line-soft: #294653;
-  --brand: #91d0ee;
-  --brand-hover: #b1e1f3;
-  --brand-orange: #ff9a72;
-  --brand-soft: #183b4c;
-  --brand-border: #497b91;
-  --danger: #ffaaa0;
-  --danger-bg: #492a2b;
-  --danger-border: #754344;
-  --shadow: 0 8px 24px rgba(0, 0, 0, .18);
+  --surface: #102636;
+  --surface-muted: #163347;
+  --ink: #f4f8fc;
+  --muted: #a8c1d2;
+  --subtle: #90adc0;
+  --line: #27475d;
+  --line-soft: #1c384a;
+  --brand: #72bbf8;
+  --brand-hover: #9ad1fc;
+  --brand-orange: #fb923c;
+  --brand-orange-hover: #fdba74;
+  --brand-soft: #14354b;
+  --brand-border: #2c5979;
+  --danger: #f87171;
+  --danger-bg: #3b2027;
+  --danger-border: #71313d;
+  --shadow: 0 10px 30px rgba(0, 0, 0, .32);
+  --sidebar: #06131e;
+  --sidebar-line: #1c384a;
+  --sidebar-muted: #a4bac4;
+  --sidebar-active: #132d40;
+  --sidebar-ink: #f4f8fc;
+  --sidebar-brand: #72bbf8;
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; background: var(--page); color: var(--ink); font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body { margin: 0; min-height: 100vh; background: var(--page); color: var(--ink); font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 15px; line-height: 1.55; }
 button, input, select, textarea { font: inherit; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
-.topbar { height: 78px; padding: 0 max(24px, calc((100% - 1120px) / 2)); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: var(--surface); }
-.brand { display: inline-flex; align-items: center; gap: 12px; color: var(--ink); text-decoration: none; font: 800 13px/1.1 Manrope, sans-serif; letter-spacing: .12em; }
-.brand img { width: 48px; height: 44px; object-fit: contain; }
-.brand small { display: block; margin-top: 5px; font: 700 10px/1 Manrope, "DM Sans", sans-serif; letter-spacing: .12em; }
+.topbar { height: 80px; padding: 0 max(24px, calc((100% - 1140px) / 2)); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,0.03); }
+.brand { display: inline-flex; align-items: center; gap: 14px; color: var(--ink); text-decoration: none; font: 800 15px/1.1 Manrope, sans-serif; letter-spacing: .08em; }
+.brand img { width: 52px; height: 48px; object-fit: contain; }
+.brand small { display: block; margin-top: 4px; font: 700 11px/1 Manrope, "DM Sans", sans-serif; letter-spacing: .12em; }
 .brand-orange { color: var(--brand-orange); }
 .brand-blue { color: var(--brand); }
 .topbar nav { display: flex; align-items: center; gap: 18px; }
-.back-link, .quiet-button { color: var(--muted); font-size: 12px; font-weight: 600; text-decoration: none; }
+.back-link, .quiet-button { color: var(--muted); font-size: 13.5px; font-weight: 600; text-decoration: none; }
 .back-link:hover, .quiet-button:hover { color: var(--brand); }
 .quiet-button { padding: 8px 0; border: 0; background: transparent; cursor: pointer; }
-.quiet-button.theme-toggle { padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.quiet-button.theme-toggle { padding: 9px 14px; border: 1px solid var(--line); border-radius: 9999px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; }
 .quiet-button.theme-toggle:hover { border-color: var(--brand); background: var(--brand-soft); }
-.workspace { width: min(1120px, calc(100% - 48px)); margin: 0 auto; }
-.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin: 54px 0 28px; }
+.workspace { width: min(1140px, calc(100% - 48px)); margin: 0 auto; }
+.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin: 48px 0 28px; }
+.page-heading h1 { margin: 6px 0 0; color: var(--ink); font: 800 32px/1.1 Manrope, sans-serif; letter-spacing: -.02em; }
+.page-heading p { margin: 8px 0 0; color: var(--muted); font-size: 15px; }
 .heading-actions { display: flex; gap: 9px; }
 .eyebrow { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .19em; }
 .eyebrow span { display: inline-block; width: 7px; height: 7px; margin: 0 7px 1px 0; border-radius: 50%; background: #f26a3d; }
@@ -212,14 +228,17 @@ dialog form { padding: 24px; }
 .cv-share-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #cvShareDialog { width: min(760px, calc(100% - 28px)); }
 .historical-imports { margin-top: 18px; }
+.historical-imported-records { margin-top: 18px; }
 .historical-import-report-list { display: grid; gap: 8px; padding: 0 22px 18px; }
-.historical-import-report { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 4px 14px; padding: 11px 13px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface-muted); color: var(--muted); font-size: 10px; }
-.historical-import-report strong { color: var(--ink); font-size: 11px; }
+.historical-import-report { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 4px 14px; padding: 14px 16px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--surface-muted); color: var(--muted); font-size: 13px; }
+.historical-import-report strong { color: var(--ink); font-size: 15px; }
 .historical-import-report small { color: var(--subtle); }
-.historical-import-report span { grid-column: 1 / -1; }
-.historical-import-report > small:last-child { grid-column: 1 / -1; }
-.historical-import-report a { grid-column: 1 / -1; color: var(--brand); font-weight: 700; text-decoration: none; }
+.archive-select { grid-column: 1; grid-row: 1; }
+.archive-report-main { display: grid; gap: 6px; min-width: 0; }
+.archive-report-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.historical-import-report a { color: var(--brand); font-weight: 700; text-decoration: none; }
 .historical-import-report a:hover { text-decoration: underline; }
+.historical-imported-records .bulk-actions label { display: inline-flex; align-items: center; gap: 8px; }
 .preview-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 8px 3px; color: var(--muted); font-size: 10px; }
 .preview-pagination .secondary-button { min-height: 30px; padding: 0 10px; font-size: 10px; }
 @media (max-width: 720px) {
@@ -260,3 +279,132 @@ dialog form { padding: 24px; }
   .paste-import { grid-template-columns: 1fr; }
   .paste-import label { grid-column: auto; }
 }
+
+/* Recruiter analytics: roll-ups from the existing saved candidate and CV-share records. */
+.recruiter-analytics-panel > .panel-heading { align-items: center; }
+.recruiter-filter { display:grid; gap:5px; min-width:190px; color:var(--muted); font-size:11px; font-weight:700; }
+.candidate-date-filters .recruiter-filter { font-size:11px; }
+.recruiter-filter select { height:36px; padding:0 30px 0 10px; border:1px solid var(--line); border-radius:7px; background:var(--surface); color:var(--ink); font-size:12px; }
+.recruiter-analytics-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; padding: 0 22px 19px; }
+.recruiter-analytics-metric { min-height: 95px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
+.recruiter-analytics-metric span, .recruiter-analytics-counts span { display: block; color: var(--muted); font-size: 11px; font-weight: 600; }
+.recruiter-analytics-metric strong { display: block; margin-top: 8px; color: var(--brand); font: 700 25px/1.1 Manrope, sans-serif; }
+.recruiter-analytics-list { display: grid; gap: 12px; padding: 0 22px 22px; }
+.recruiter-analytics-card { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.recruiter-analytics-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.recruiter-analytics-head h3 { margin: 0; color: var(--ink); font-size: 16px; }
+.recruiter-analytics-head > span { color: var(--brand); font-size: 11px; font-weight: 700; }
+.recruiter-analytics-counts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 13px; }
+.recruiter-analytics-counts > div { padding: 9px 11px; border-radius: 7px; background: var(--brand-soft); }
+.recruiter-analytics-counts strong { display: block; margin-top: 4px; color: var(--ink); font-size: 17px; }
+.recruiter-analytics-bars { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.recruiter-analytics-bar { display: grid; grid-template-columns: 1fr auto; gap: 5px 8px; align-items: center; color: var(--muted); font-size: 10px; }
+.recruiter-analytics-bar .riq-bar { grid-column: 1 / -1; width: 100%; min-width: 0; }
+.recruiter-analytics-bar .riq-bar i { background: var(--brand); }
+.recruiter-analytics-bar strong { color: var(--ink); }
+.recruiter-record-details { margin-top:14px; border-top:1px solid var(--line-soft); padding-top:11px; }
+.recruiter-record-details > summary { color:var(--brand); font-size:12px; font-weight:700; cursor:pointer; }
+.recruiter-detail-group { margin-top:12px; }
+.recruiter-detail-group h4 { display:flex; justify-content:space-between; margin:0 0 6px; color:var(--ink); font-size:12px; }
+.recruiter-detail-group h4 span { color:var(--muted); font-weight:600; }
+.recruiter-detail-group .table-wrap { max-height:280px; min-height:0; }
+.recruiter-detail-group table { min-width:650px; }
+.recruiter-detail-group th,.recruiter-detail-group td { padding:8px 10px; font-size:11px; }
+.recruiter-detail-empty { margin:0; color:var(--subtle); font-size:11px; }
+@media(max-width:720px) { .recruiter-analytics-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 15px 15px; }.recruiter-analytics-list { padding: 0 15px 16px; }.recruiter-analytics-counts { grid-template-columns: repeat(3, minmax(0, 1fr)); }.recruiter-analytics-bars { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.recruiter-weekly-heading { display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin:4px 22px 14px;padding-top:17px;border-top:1px solid var(--line); }
+.recruiter-weekly-heading h3 { margin:0;color:var(--ink);font-size:17px; }
+.recruiter-weekly-heading p { max-width:760px;margin:6px 0 0;color:var(--muted);font-size:11px;line-height:1.5; }
+.recruiter-weekly-heading label { display:grid;gap:5px;min-width:190px;color:var(--muted);font-size:10px;font-weight:700; }
+.recruiter-weekly-heading input { height:36px;padding:0 9px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--ink);font-size:12px; }
+.recruiter-weekly-list { display:grid;gap:12px;padding:0 22px 22px; }
+.recruiter-weekly-card { overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--surface); }
+.recruiter-weekly-card-heading { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 15px;background:var(--surface-muted); }
+.recruiter-weekly-card-heading h4 { margin:0;color:var(--ink);font-size:14px; }
+.recruiter-weekly-card-heading span { color:var(--brand);font-size:11px;font-weight:700; }
+.recruiter-weekly-table-wrap { min-height:0;border-top:0; }
+.recruiter-weekly-table { min-width:1000px; }
+.recruiter-weekly-table th,.recruiter-weekly-table td { min-width:92px;text-align:center;font-size:10px; }
+.recruiter-weekly-table th:first-child,.recruiter-weekly-table td:first-child { min-width:155px;text-align:left; }
+.recruiter-weekly-table thead th { vertical-align:top; }
+.recruiter-weekly-table th small { display:block;margin-top:4px;color:var(--subtle);font-size:9px;font-weight:500;letter-spacing:0;text-transform:none; }
+.recruiter-weekly-table td small { display:block;margin-top:3px;color:var(--subtle);font-size:9px; }
+.recruiter-day-count { display:inline-flex;min-width:26px;min-height:25px;align-items:center;justify-content:center;border-radius:6px;background:var(--surface-muted);color:var(--ink);font-size:12px; }
+.recruiter-day-count.met { background:var(--brand-soft);color:var(--brand); }
+.recruiter-day-count.off { background:var(--line-soft);color:var(--subtle); }
+.recruiter-week-total { background:var(--surface-muted); }
+.recruiter-week-target { color:var(--brand);font-size:12px; }
+
+/* RecruitIQ and Talent Acquisition share CRM's compact, high-contrast side navigation. */
+@media (min-width: 1051px) {
+  body:has(.tracker-tabs) { padding-left: 240px; }
+  body:has(.tracker-tabs) > .topbar { position: sticky; top: 0; z-index: 20; height: 72px; padding-left: 26px; padding-right: 28px; box-shadow: 0 5px 20px rgba(3, 15, 25, .12); }
+  body:has(.tracker-tabs) > .topbar::before { position: fixed; z-index: 22; top: 0; bottom: 0; left: 0; width: 240px; border-right: 1px solid var(--sidebar-line); background: var(--sidebar); content: ""; }
+  .tracker-tabs { position: fixed; z-index: 23; top: 82px; bottom: 18px; left: 10px; width: 220px; display: flex; flex-direction: column; align-items: stretch; gap: 5px; margin: 0; padding: 10px 8px; overflow-y: auto; border: 0; border-radius: 12px; background: transparent; }
+  .tracker-tabs::before { content: "TALENT WORKSPACE"; padding: 9px 12px 12px; color: var(--sidebar-muted); font-size: 11px; font-weight: 800; letter-spacing: .12em; }
+  .tracker-tabs button { min-height: 43px; padding: 0 12px; border-radius: 8px; color: var(--sidebar-muted); font-size: 13px; text-align: left; transition: background .16s ease, color .16s ease, transform .16s ease; }
+  .tracker-tabs button:hover { background: var(--sidebar-active); color: var(--sidebar-ink); transform: translateX(2px); }
+  .tracker-tabs button[aria-selected="true"] { background: var(--sidebar-active); color: var(--sidebar-brand); box-shadow: inset 3px 0 0 var(--sidebar-brand); }
+  .workspace { width: min(1240px, calc(100% - 52px)); }
+}
+
+@media (min-width: 721px) {
+  .page-heading p, .panel-heading p { font-size: 13px; }
+  .tracker-tabs button, .primary-button, .secondary-button { font-size: 13px; }
+  .candidate-panel td { font-size: 12px; }
+  .candidate-panel th { font-size: 10px; }
+  .candidate-name { font-size: 13px; }
+  .candidate-email, .raw-status { font-size: 11px; }
+  .action-button, .stage-pill, .stage-select { font-size: 11px; }
+  .search-wrap input, .select-wrap select { font-size: 12px; }
+}
+@media (max-width: 1050px) { .tracker-tabs { box-shadow: 0 8px 24px rgba(15, 35, 48, .08); } }
+
+/* Keep the grouped CV-share table headings legible in both themes. */
+.cv-share-table .date-band th { background: var(--brand-soft); color: var(--brand); }
+.cv-share-table .date-band span { color: var(--muted); }
+:root[data-theme="dark"] .week-cell .achievement-note.met { color: #86efc3; }
+
+/* Slightly larger type for every Talent Acquisition and RecruitIQ screen. */
+body { font-size:16px; }
+.topbar nav .back-link,.topbar nav .quiet-button { font-size:14px; }
+.brand { font-size:14px; }
+.brand small { font-size:11px; }
+.page-heading p,.panel-heading p { font-size:14px; }
+.eyebrow { font-size:11px; }
+.primary-button,.secondary-button,.danger-button { font-size:14px; }
+.metric-card span { font-size:13px; }
+.metric-card small { font-size:12px; }
+.candidate-date-filters > strong,.recruiter-filter { font-size:12px; }
+.candidate-date-filters label { font-size:11px; }
+.candidate-date-filters input,.candidate-date-filters select,.recruiter-filter select { font-size:13px; }
+.tracker-tabs button { font-size:14px; }
+th { font-size:11px; }
+td,.candidate-panel td { font-size:13px; }
+.candidate-name { font-size:14px; }
+.candidate-email,.raw-status { font-size:12px; }
+.stage-pill,.stage-select,.action-button { font-size:12px; }
+.search-wrap input,.select-wrap select { font-size:13px; }
+.empty-state strong { font-size:14px; }
+.empty-state p,.status-message,.weekly-message { font-size:13px; }
+.form-grid label,.riq-form label,.riq-dialog label { font-size:13px; }
+.form-grid input,.form-grid select,.form-grid textarea { font-size:14px; }
+.recruiter-analytics-metric span,.recruiter-analytics-counts span { font-size:12px; }
+.recruiter-analytics-bar,.recruiter-weekly-heading p { font-size:12px; }
+.recruiter-weekly-heading label { font-size:11px; }
+.recruiter-weekly-table th,.recruiter-weekly-table td,.recruiter-weekly-table th small,.recruiter-weekly-table td small { font-size:11px; }
+.recruiter-detail-group th { font-size:11px; }
+.recruiter-detail-group td { font-size:12px; }
+footer { font-size:12px; }
+.monthly-recruiter-heading { margin-top:20px; }
+.monthly-recruiter-heading input { height:38px; min-width:190px; padding:0 10px; border:1px solid var(--line); border-radius:7px; background:var(--surface); color:var(--ink); font-size:14px; }
+.recruiter-monthly-card { padding-bottom:15px; }
+.recruiter-monthly-progress { height:8px; margin:0 15px 12px; overflow:hidden; border-radius:99px; background:var(--line-soft); }
+.recruiter-monthly-progress i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--brand),var(--brand-orange)); }
+.recruiter-monthly-metrics { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:8px; padding:0 15px; }
+.recruiter-monthly-metrics > div { min-height:64px; padding:9px 10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-muted); }
+.recruiter-monthly-metrics span { display:block; color:var(--muted); font-size:11px; font-weight:600; }
+.recruiter-monthly-metrics strong { display:block; margin-top:5px; color:var(--ink); font-size:18px; }
+@media(max-width:950px) { .recruiter-monthly-metrics { grid-template-columns:repeat(4,minmax(0,1fr)); } }
+@media(max-width:560px) { .monthly-recruiter-heading { margin:4px 15px 12px; }.monthly-recruiter-heading input { min-width:0; width:100%; }.recruiter-monthly-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:720px) { .recruiter-weekly-heading { align-items:stretch;flex-direction:column;margin:4px 15px 12px; }.recruiter-weekly-heading label { min-width:0; }.recruiter-weekly-list { padding:0 15px 16px; }.recruiter-weekly-card-heading { align-items:flex-start;flex-direction:column;gap:4px; } }

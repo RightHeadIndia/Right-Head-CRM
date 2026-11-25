@@ -39,6 +39,7 @@
     <label>Month<select id="filterMonth"><option value="">All months</option><option value="01">January</option><option value="02">February</option><option value="03">March</option><option value="04">April</option><option value="05">May</option><option value="06">June</option><option value="07">July</option><option value="08">August</option><option value="09">September</option><option value="10">October</option><option value="11">November</option><option value="12">December</option></select></label>
     <label>Date<input id="filterDate" type="date" aria-label="Filter by exact date; blank shows all dates"></label>
     <label>Year<select id="filterYear"><option value="">All years</option></select></label>
+    <label class="recruiter-filter">Recruiter<select id="recruiterFilter"><option value="">All recruiters</option></select></label>
     <label>Sort by date<select id="dateSort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
     <button id="clearDateFilters" class="secondary-button" type="button">Clear filters</button>
   </section>
@@ -50,7 +51,9 @@
     <button type="button" role="tab" aria-selected="false" data-tab="joined">Joined</button>
     <button type="button" role="tab" aria-selected="false" data-tab="weekly">Weekly Tracker</button>
     <button type="button" role="tab" aria-selected="false" data-tab="cvshares">CV Shared</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="recruiters">Recruiter Analytics</button>
     <button type="button" role="tab" aria-selected="false" data-tab="pipeline">Candidate Pipeline</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="importhistory">Import History</button>
   </nav>
   <section class="tracker-view" id="interviewsView">
     <section class="candidate-panel">
@@ -72,7 +75,7 @@
   </section>
   <section class="tracker-view" id="weeklyView" hidden>
     <section class="candidate-panel">
-      <div class="panel-heading"><div><h2>Weekly Tracker</h2><p>Daily counts are calculated from candidate records. Targets and achievements are editable.</p></div><div class="filters"><label class="week-picker">Week starting Monday<input id="weekStart" type="date"></label><button id="addRecruiter" class="secondary-button" type="button">+ Add recruiter</button><button id="saveWeekly" class="primary-button" type="button">Save weekly entries</button><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
+      <div class="panel-heading"><div><h2>Weekly Tracker</h2><p>Add a recruiter once; their name will be available in candidate and CV-share forms and in recruiter reports. Daily counts come from saved records.</p></div><div class="filters"><label class="week-picker">Week starting Monday<input id="weekStart" type="date"></label><button id="addRecruiter" class="secondary-button" type="button">+ Add recruiter</button><button id="saveWeekly" class="primary-button" type="button">Save weekly entries</button><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
       <div id="weeklyMessage" class="weekly-message" role="status" hidden></div>
       <div id="weeklyRows" class="weekly-trackers"></div>
     </section>
@@ -83,6 +86,31 @@
       <div id="cvShareBulkActions" class="bulk-actions" hidden><span><strong id="selectedCvShareCount">0</strong> CV shares selected</span><button id="clearCvShareSelection" class="secondary-button" type="button">Clear selection</button><button id="deleteSelectedCvShares" class="danger-button" type="button">Delete selected</button></div>
       <div class="table-wrap"><table class="cv-share-table"><thead><tr><th><input id="selectAllCvShares" type="checkbox" aria-label="Select all visible CV shares"></th><th>Date</th><th>Recruiter</th><th>Share status / time</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Designation</th><th>Location</th><th>Work location</th><th>Experience</th><th>Current company</th><th>Current CTC</th><th>Expected CTC</th><th>Notice period</th><th>Remarks</th><th>Phone</th><th>Email</th><th></th></tr></thead><tbody id="cvShareRows"></tbody></table><div id="cvShareEmpty" class="empty-state compact" hidden><strong>No CV shares match these filters</strong><p>Import a CV sharing worksheet or add a CV share record.</p></div></div>
       <div id="cvSharePagination" class="preview-pagination" hidden><span id="cvSharePageSummary"></span><button id="cvSharePrevPage" class="secondary-button" type="button">Previous</button><button id="cvShareNextPage" class="secondary-button" type="button">Next</button></div>
+    </section>
+  </section>
+  <section class="tracker-view" id="recruitersView" hidden>
+    <section class="candidate-panel recruiter-analytics-panel">
+      <div class="panel-heading"><div><h2>Recruiter-wise performance</h2><p>The recruiter filter above applies across candidate, CV share, weekly, and analytics sections. Choose one name to review that recruiter’s counts and full activity records.</p></div><button class="secondary-button" type="button" id="refreshRecruiterAnalytics">Refresh data</button></div>
+      <div id="recruiterAnalyticsMetrics" class="recruiter-analytics-metrics"></div>
+      <div id="recruiterAnalytics" class="recruiter-analytics-list"></div>
+      <div class="recruiter-weekly-heading"><div><h3>Weekly recruiter activity</h3><p>Interviews use the interview date. Shortlists, offers, joins, and rejections use their dated status records, never the last-updated or interview date. Share target: 4 per weekday; 1st/3rd Saturdays are half days (2), 2nd/4th are off. A 5th Saturday is treated as a half day.</p></div><label>Week starting Monday<input id="recruiterWeekStart" type="date"></label></div>
+      <div id="recruiterWeeklyAnalytics" class="recruiter-weekly-list"></div>
+      <div class="recruiter-weekly-heading monthly-recruiter-heading"><div><h3>Monthly recruiter activity</h3><p>Monthly totals use dated CV shares, interview records, and candidate status changes. Use the Year filter above for year-wide recruiter totals.</p></div><label>Month<input id="recruiterMonth" type="month"></label></div>
+      <div id="recruiterMonthlyAnalytics" class="recruiter-weekly-list"></div>
+    </section>
+  </section>
+  <section class="tracker-view" id="importhistoryView" hidden>
+    <section class="candidate-panel historical-imports">
+      <div class="panel-heading"><div><h2>Historical import reports</h2><p>Manage archived workbooks here. Renaming or deleting an archive only affects its original workbook copy; imported tracker records are managed below.</p></div><button class="secondary-button" type="button" id="refreshImportHistory">Refresh history</button></div>
+      <div id="importArchiveBulkActions" class="bulk-actions"><label><input id="selectAllImportArchives" type="checkbox"> Select all visible</label><span><strong id="selectedImportArchiveCount">0</strong> archives selected</span><button class="secondary-button" type="button" id="clearImportArchiveSelection">Clear selection</button><button class="danger-button" type="button" id="deleteSelectedImportArchives">Delete selected archives</button></div>
+      <div id="historicalImportReports" class="historical-import-report-list"><p class="empty-state compact">Loading import history…</p></div>
+    </section>
+    <section class="candidate-panel historical-imported-records">
+      <div class="panel-heading"><div><h2>Imported CV share records</h2><p>Edit or remove individual imported rows, select multiple rows to assign a recruiter, or delete selected rows. These changes update the CV Shared tracker.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="importedshares" placeholder="Search imported CV shares" aria-label="Search imported CV share history"></label><button class="secondary-button" type="button" id="historyAddRecruiter">+ Add recruiter</button></div></div>
+      <div id="importedShareBulkActions" class="bulk-actions" hidden><span><strong id="selectedImportedShareCount">0</strong> rows selected</span><label>Recruiter<input id="importedShareRecruiter" list="recruiterNames" autocomplete="off" placeholder="Recruiter name"></label><button class="secondary-button" type="button" id="assignImportedShareRecruiter">Assign recruiter</button><button class="danger-button" type="button" id="deleteSelectedImportedShares">Delete selected</button></div>
+      <p id="importedShareRecordCount" class="history-record-count" aria-live="polite"></p>
+      <div class="table-wrap"><table class="cv-share-table"><thead><tr><th><input id="selectAllImportedShares" type="checkbox" aria-label="Select visible imported CV share rows"></th><th>Date</th><th>Recruiter</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Location</th><th>Experience</th><th>Share status / time</th><th>Actions</th></tr></thead><tbody id="importedShareRows"></tbody></table><p id="importedShareEmpty" class="empty-state compact" hidden>No imported CV share rows match these filters.</p></div>
+      <div id="importedSharePagination" class="preview-pagination" hidden><span id="importedSharePageSummary"></span><button class="secondary-button" type="button" id="importedSharePrevPage">Previous</button><button class="secondary-button" type="button" id="importedShareNextPage">Next</button></div>
     </section>
   </section>
   <section class="tracker-view" id="pipelineView" hidden>
@@ -105,9 +133,9 @@
     </div>
   </section>
   </section>
-  <section class="candidate-panel historical-imports"><div class="panel-heading"><div><h2>Historical import reports</h2><p>Original workbook worksheets, hidden sheet contents, and import results are stored permanently.</p></div></div><div id="historicalImportReports" class="historical-import-report-list"><p class="empty-state compact">Loading import history…</p></div></section>
   <footer><span>© <span class="brand-orange">Right Head</span> <span class="brand-blue">HR Consultants</span></span><a href="mailto:contact@righthead.in">Need help? Contact us</a></footer>
 </main>
+<datalist id="recruiterNames"></datalist>
 <dialog id="candidateDialog" aria-labelledby="dialogTitle">
   <form id="candidateForm" method="dialog">
     <div class="dialog-heading"><div><span class="eyebrow">CANDIDATE PROFILE</span><h2 id="dialogTitle">Add candidate</h2></div><button id="closeDialog" class="close-button" type="button" aria-label="Close dialog">×</button></div>
@@ -117,10 +145,13 @@
       <label>Position <span>*</span><input name="role" required maxlength="200" placeholder="e.g. Product Designer"></label>
       <label>Stage<select name="stage"></select></label>
       <label>Company<input name="company" maxlength="200"></label>
-      <label>Recruiter / TA Name<input name="recruiter" maxlength="200"></label>
+      <label>Recruiter / TA Name<input name="recruiter" maxlength="200" list="recruiterNames" autocomplete="off"></label>
       <label>Month<input name="month" type="month"></label>
       <label>Interview date<input name="interviewDate" type="date"></label>
       <label>Shared date<input name="sharedDate" type="date"></label>
+      <label>Shortlisted date<input name="shortlistedDate" type="date"></label>
+      <label>Offer date<input name="offeredDate" type="date"></label>
+      <label>Rejected date<input name="rejectedDate" type="date"></label>
       <label>Final call<input name="finalCall" maxlength="100" placeholder="e.g. Selected"></label>
       <label>Joining date<input name="doj" type="date"></label>
       <label class="full">Interview feedback<textarea name="feedback" rows="3" maxlength="6000"></textarea></label>
@@ -139,7 +170,7 @@
     <div class="dialog-heading"><div><span class="eyebrow">CV SHARED TRACKER</span><h2 id="cvShareDialogTitle">Add CV share</h2></div><button id="closeCvShareDialog" class="close-button" type="button" aria-label="Close dialog">×</button></div>
     <input name="id" type="hidden">
     <div class="form-grid cv-share-form-grid">
-      <label>Date<input name="sharedAt" type="date" required></label><label>Recruiter<input name="recruiter" maxlength="200"></label>
+      <label>Date<input name="sharedAt" type="date" required></label><label>Recruiter<input name="recruiter" maxlength="200" list="recruiterNames" autocomplete="off"></label>
       <label>Share status / time<input name="shareStatus" maxlength="250" placeholder="Shared, Done, 5:15 PM"></label><label>Company<input name="company" maxlength="200"></label>
       <label>Profile<input name="role" maxlength="200"></label><label>Candidate name<input name="candidateName" maxlength="200" required></label>
       <label>Designation<input name="designation" maxlength="200"></label><label>Candidate location<input name="location" maxlength="200"></label>
