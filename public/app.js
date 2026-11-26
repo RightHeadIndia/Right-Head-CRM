@@ -291,13 +291,34 @@ async function renderDashboard() {
 // ---------- list pages ----------
 function renderList() {
   const cfg = PAGES[page] || PAGES.clients;
-  const q = $('#search').value.toLowerCase();
+  const q = $('#search').value.trim().toLocaleLowerCase();
   let rows = clients.filter(cfg.filter);
-  if (q) rows = rows.filter(c => [c.name, c.company, c.phone, c.email, c.location, c.source, c.notes].join(' ').toLowerCase().includes(q));
+  if (q) rows = rows.filter(c => [c.name, c.company, c.phone, c.email, ...(c.alternateEmails || []), c.location, c.source, c.notes, c.stage, STAGES[c.stage], c.communicationStatus, COMMUNICATION[c.communicationStatus], c.callStatus, CALLS[c.callStatus]]
+    .some(value => String(value || '').toLocaleLowerCase().includes(q)));
   rows.sort(cfg.sort || ((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
-  const stageFilter = page === 'clients' || page === 'calls'
-    ? `<select id="stageF" onchange="renderList()"><option value="">All stages</option>${Object.keys(STAGES).map(k => `<option value="${k}" ${$('#stageF')?.value === k ? 'selected' : ''}>${STAGES[k]}</option>`).join('')}</select>` : '';
-  if ($('#stageF') && $('#stageF').value) rows = rows.filter(c => (Object.hasOwn(STAGES, c.stage) ? c.stage : 'new') === $('#stageF').value);
+  const isClientList = page === 'clients' || page === 'calls';
+  const selected = id => $(`#${id}`)?.value || '';
+  const stage = selected('stageF'), communication = selected('communicationF'), call = selected('callF');
+  const emailShared = selected('emailSharedF'), credentialsShared = selected('credentialsSharedF'), followUp = selected('followUpF');
+  const stageFilter = isClientList ? `<select id="stageF" aria-label="Filter by stage" onchange="renderList()"><option value="">All stages</option>${Object.keys(STAGES).map(k => `<option value="${k}" ${stage === k ? 'selected' : ''}>${STAGES[k]}</option>`).join('')}</select>
+    <select id="communicationF" aria-label="Filter by communication" onchange="renderList()"><option value="">All communication</option>${Object.entries(COMMUNICATION).map(([k, label]) => `<option value="${k}" ${communication === k ? 'selected' : ''}>${label}</option>`).join('')}</select>
+    <select id="callF" aria-label="Filter by call status" onchange="renderList()"><option value="">All call statuses</option>${Object.entries(CALLS).map(([k, label]) => `<option value="${k}" ${call === k ? 'selected' : ''}>${label}</option>`).join('')}</select>
+    <select id="emailSharedF" aria-label="Filter by email shared" onchange="renderList()"><option value="">Email shared: any</option><option value="true" ${emailShared === 'true' ? 'selected' : ''}>Email shared: yes</option><option value="false" ${emailShared === 'false' ? 'selected' : ''}>Email shared: no</option></select>
+    <select id="credentialsSharedF" aria-label="Filter by credentials shared" onchange="renderList()"><option value="">Credentials: any</option><option value="true" ${credentialsShared === 'true' ? 'selected' : ''}>Credentials: yes</option><option value="false" ${credentialsShared === 'false' ? 'selected' : ''}>Credentials: no</option></select>
+    <select id="followUpF" aria-label="Filter by follow-up" onchange="renderList()"><option value="">Follow-up: any</option><option value="set" ${followUp === 'set' ? 'selected' : ''}>Follow-up set</option><option value="none" ${followUp === 'none' ? 'selected' : ''}>No follow-up</option><option value="overdue" ${followUp === 'overdue' ? 'selected' : ''}>Overdue</option><option value="today" ${followUp === 'today' ? 'selected' : ''}>Due today</option></select>
+    <button class="btn small" type="button" onclick="clearClientFilters()">Clear filters</button>` : '';
+  if (stage) rows = rows.filter(c => (Object.hasOwn(STAGES, c.stage) ? c.stage : 'new') === stage);
+  if (communication) rows = rows.filter(c => (c.communicationStatus || 'not_contacted') === communication);
+  if (call) rows = rows.filter(c => (c.callStatus || 'not_called') === call);
+  if (emailShared) rows = rows.filter(c => Boolean(c.emailShared) === (emailShared === 'true'));
+  if (credentialsShared) rows = rows.filter(c => Boolean(c.credentialsShared) === (credentialsShared === 'true'));
+  if (followUp === 'set') rows = rows.filter(c => Boolean(c.followUp));
+  if (followUp === 'none') rows = rows.filter(c => !c.followUp);
+  if (followUp === 'overdue' || followUp === 'today') rows = rows.filter(c => {
+    if (!c.followUp || ['onboarded', 'rejected'].includes(c.stage)) return false;
+    const due = new Date(c.followUp), now = new Date();
+    return followUp === 'overdue' ? due < new Date(now.getFullYear(), now.getMonth(), now.getDate()) : due >= new Date(now.getFullYear(), now.getMonth(), now.getDate()) && due < new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  });
   const total = rows.length;
   rows = rows.slice(0, listLimit);
   renderedClientIds = rows.map(client => client.id);
@@ -347,6 +368,10 @@ function renderList() {
   </tr>`).join('') || '<tr><td colspan="10" class="empty">No clients in this view.</td></tr>'}
   </tbody></table></div>${total > rows.length ? `<div class="actions" style="justify-content:center"><button class="btn" onclick="listLimit+=200;renderList()">Show more (${total - rows.length} not shown)</button></div>` : ''}`;
   updateClientSelectionUI();
+}
+function clearClientFilters() {
+  ['stageF', 'communicationF', 'callF', 'emailSharedF', 'credentialsSharedF', 'followUpF'].forEach(id => { const input = $(`#${id}`); if (input) input.value = ''; });
+  renderList();
 }
 function updateClientSelectionUI() {
   const toolbar = $('#bulkStatusToolbar');
