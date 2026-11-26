@@ -121,6 +121,15 @@ h1 { margin-top: 12px; font-size: 35px; line-height: 1.2; }
 .danger-button:hover { filter: brightness(.97); }
 .table-wrap input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--brand); cursor: pointer; }
 .weekly-trackers { padding: 0 18px 18px; }
+.recruiter-management { margin: 0 18px 18px; padding: 16px; border: 1px solid var(--brand-border); border-radius: 8px; background: var(--surface-muted); }
+.recruiter-management h3 { margin: 0 0 12px; }
+.recruiter-add-row { display: flex; align-items: end; gap: 10px; margin-bottom: 12px; }
+.recruiter-add-row label { display: grid; gap: 5px; width: min(360px, 100%); color: var(--muted); font-size: 12px; }
+.recruiter-add-row input { min-height: 38px; padding: 8px 10px; border: 1px solid var(--brand-border); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.recruiter-directory-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px; }
+.recruiter-directory-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--brand-border); border-radius: 6px; background: var(--surface); }
+.recruiter-directory-row span { flex: 1; overflow-wrap: anywhere; }
+.recruiter-directory-row button { padding: 6px 9px; }
 .recruiter-week { margin: 0 0 16px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
 .recruiter-week-heading { display: flex; align-items: center; justify-content: space-between; padding: 12px 15px; background: var(--surface-muted); }
 .recruiter-week-heading h3 { margin: 0; font-size: 13px; }
@@ -147,6 +156,9 @@ h1 { margin-top: 12px; font-size: 35px; line-height: 1.2; }
 .search-wrap input::placeholder { color: var(--subtle); }
 .select-wrap select { height: 36px; padding: 0 28px 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 11px; }
 .table-wrap { min-height: 180px; border-top: 1px solid var(--line-soft); overflow-x: auto; }
+.table-wrap thead th { position: sticky; top: 0; z-index: 2; }
+.table-wrap tbody tr:hover { background: var(--brand-soft); }
+.table-wrap td select, .table-wrap td input:not([type="checkbox"]) { min-height: 34px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th { padding: 11px 16px; color: var(--muted); background: var(--surface-muted); font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 th:first-child, td:first-child { padding-left: 22px; }
@@ -404,10 +416,12 @@ td,.candidate-panel td { font-size:13px; }
 footer { font-size:12px; }
 .monthly-recruiter-heading { margin-top:20px; }
 .monthly-recruiter-heading input { height:38px; min-width:190px; padding:0 10px; border:1px solid var(--line); border-radius:7px; background:var(--surface); color:var(--ink); font-size:14px; }
-.recruiter-monthly-card { padding-bottom:15px; }
+.recruiter-monthly-card { display:grid; grid-template-columns:minmax(0,1fr); row-gap:12px; padding:0 0 15px; overflow:hidden; }
 .recruiter-monthly-progress { height:8px; margin:0 15px 12px; overflow:hidden; border-radius:99px; background:var(--line-soft); }
 .recruiter-monthly-progress i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--brand),var(--brand-orange)); }
-.recruiter-monthly-metrics { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:8px; padding:0 15px; }
+.recruiter-monthly-metrics { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:8px; margin:0 15px 6px; padding:0; }
+.tracker-view .recruiter-monthly-table-wrap { width:100%; min-width:0; max-height:60vh; min-height:0; margin-top:2px; overflow:auto; border-top:1px solid var(--line-soft); clear:both; }
+.recruiter-monthly-table-wrap table { margin:0; }
 .recruiter-monthly-metrics > div { min-height:64px; padding:9px 10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-muted); }
 .recruiter-monthly-metrics span { display:block; color:var(--muted); font-size:11px; font-weight:600; }
 .recruiter-monthly-metrics strong { display:block; margin-top:5px; color:var(--ink); font-size:18px; }

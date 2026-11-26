@@ -14,6 +14,28 @@ const pct = x => Math.round((x || 0) * 100) + '%';
 // ======================= TASKS =======================
 const PRIORITY = { high: 'High', normal: 'Normal', low: 'Low' };
 let taskFilter = 'open';
+const selectedTaskIds = new Set();
+const selectedDealIds = new Set();
+
+function setVisibleSelection(set, checked) {
+  document.querySelectorAll('[data-select-record]').forEach(box => {
+    if (checked) set.add(box.dataset.id); else set.delete(box.dataset.id);
+    box.checked = checked;
+  });
+}
+function syncRecordSelection(type, set) {
+  const toolbar = $(`#${type}BulkActions`);
+  if (toolbar) toolbar.hidden = set.size === 0;
+  const count = $(`#${type}SelectedCount`);
+  if (count) count.textContent = set.size;
+  const all = $(`#selectAll${type[0].toUpperCase()}${type.slice(1)}`);
+  if (all) {
+    const boxes = [...document.querySelectorAll(`[data-select-record="${type}"]`)];
+    const checked = boxes.filter(box => set.has(box.dataset.id)).length;
+    all.checked = boxes.length > 0 && checked === boxes.length;
+    all.indeterminate = checked > 0 && checked < boxes.length;
+  }
+}
 
 async function renderTasks() {
   const all = await api('/tasks');
@@ -33,8 +55,10 @@ async function renderTasks() {
       .map(([k, l]) => `<option value="${k}" ${taskFilter === k ? 'selected' : ''}>${l} (${n(k)})</option>`).join('')}</select>
     <button class="btn primary" onclick="openTask()">+ Add task</button>${exportBtn('tasks')}
   </div>
-  <div class="table-wrap"><table><thead><tr><th style="width:36px"></th><th>Task</th><th>Client</th><th>Due</th><th>Priority</th><th></th></tr></thead><tbody>
+  <div class="bulk-status-toolbar" id="tasksBulkActions" ${selectedTaskIds.size ? '' : 'hidden'}><strong><span id="tasksSelectedCount">${selectedTaskIds.size}</span> tasks selected</strong><button class="btn danger" onclick="deleteSelectedTasks()">Delete selected</button><button class="btn" onclick="selectedTaskIds.clear();renderTasks()">Clear selection</button></div>
+  <div class="table-wrap"><table><thead><tr><th style="width:36px"><input id="selectAllTasks" type="checkbox" aria-label="Select all visible tasks" onchange="setVisibleSelection(selectedTaskIds,this.checked);renderTasks()"></th><th style="width:36px"></th><th>Task</th><th>Client</th><th>Due</th><th>Priority</th><th></th></tr></thead><tbody>
   ${rows.map(t => `<tr class="${t.done ? 'done-row' : ''}">
+    <td><input type="checkbox" data-select-record="tasks" data-id="${esc(t.id)}" ${selectedTaskIds.has(t.id) ? 'checked' : ''} aria-label="Select task ${esc(t.title)}" onchange="this.checked?selectedTaskIds.add(this.dataset.id):selectedTaskIds.delete(this.dataset.id);syncRecordSelection('tasks',selectedTaskIds)"></td>
     <td><input type="checkbox" style="width:auto" ${t.done ? 'checked' : ''} onchange="toggleTask('${t.id}',this.checked)"></td>
     <td><b>${esc(t.title)}</b>${t.notes ? `<br><small style="color:var(--muted)">${esc(t.notes).slice(0, 100)}</small>` : ''}</td>
     <td>${t.clientId && clientName(t.clientId) ? `<a href="javascript:openClient('${t.clientId}')">${esc(clientName(t.clientId))}</a>` : '-'}</td>
@@ -42,6 +66,14 @@ async function renderTasks() {
     <td><span class="badge p-${t.priority}">${PRIORITY[t.priority]}</span></td>
     <td><button class="btn small" onclick="openTask('${t.id}')">Edit</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">No tasks here.</td></tr>'}
   </tbody></table></div>`;
+  syncRecordSelection('tasks', selectedTaskIds);
+}
+
+async function deleteSelectedTasks() {
+  const ids = [...selectedTaskIds];
+  if (!ids.length || !confirm(`Delete ${ids.length} selected task${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+  try { const result = await api('/tasks/bulk-delete', 'POST', { ids }); selectedTaskIds.clear(); toast(`Deleted ${result.deleted} task${result.deleted === 1 ? '' : 's'}`); await renderTasks(); renderNav(); }
+  catch (error) { toast(error.message); }
 }
 
 async function toggleTask(id, done) {
@@ -94,17 +126,28 @@ async function renderDeals() {
   const open = all.filter(d => !['won', 'lost'].includes(d.stage));
   $('#view').innerHTML = `<div class="toolbar">
     <button class="btn primary" onclick="openDeal()">+ New deal</button>${exportBtn('deals')}
+    <label class="bulk-clear"><input id="selectAllDeals" type="checkbox" aria-label="Select all visible deals" onchange="setVisibleSelection(selectedDealIds,this.checked);renderDeals()"> Select all visible</label>
     <span style="color:var(--muted)">${open.length} open deal(s) worth <b>${money(open.reduce((n, d) => n + d.value, 0))}</b> &middot; drag cards between columns to move them</span></div>
+  <div class="bulk-status-toolbar" id="dealsBulkActions" ${selectedDealIds.size ? '' : 'hidden'}><strong><span id="dealsSelectedCount">${selectedDealIds.size}</span> deals selected</strong><button class="btn danger" onclick="deleteSelectedDeals()">Delete selected</button><button class="btn" onclick="selectedDealIds.clear();renderDeals()">Clear selection</button></div>
   <div class="board">${Object.keys(DEAL_STAGES).map(s => {
     const ds = deals.filter(d => d.stage === s).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
     return `<div class="col col-${s}" ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')" ondrop="dropDeal(event,'${s}')">
       <h4>${DEAL_STAGES[s]} <span>${ds.length} &middot; ${money(ds.reduce((n, d) => n + d.value, 0))}</span></h4>
       ${ds.map(d => `<div class="deal" draggable="true" ondragstart="event.dataTransfer.setData('text/plain','${d.id}')" onclick="openDeal('${d.id}')">
+        <label class="deal-select" onclick="event.stopPropagation()"><input type="checkbox" data-select-record="deals" data-id="${esc(d.id)}" ${selectedDealIds.has(d.id) ? 'checked' : ''} aria-label="Select deal ${esc(d.title)}" onchange="this.checked?selectedDealIds.add(this.dataset.id):selectedDealIds.delete(this.dataset.id);syncRecordSelection('deals',selectedDealIds)"> Select</label>
         <b>${esc(d.title)}</b><div>${money(d.value)}</div>
         <small>${esc(clientName(d.clientId) || 'No client')}</small>
         ${d.expectedClose ? `<small class="${dealOverdue(d) ? 'late' : ''}">Close: ${fmtDay(d.expectedClose)}</small>` : ''}
       </div>`).join('') || '<div class="empty">-</div>'}</div>`;
   }).join('')}</div>`;
+  syncRecordSelection('deals', selectedDealIds);
+}
+
+async function deleteSelectedDeals() {
+  const ids = [...selectedDealIds];
+  if (!ids.length || !confirm(`Delete ${ids.length} selected deal${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+  try { const result = await api('/deals/bulk-delete', 'POST', { ids }); selectedDealIds.clear(); toast(`Deleted ${result.deleted} deal${result.deleted === 1 ? '' : 's'}`); await renderDeals(); }
+  catch (error) { toast(error.message); }
 }
 async function dropDeal(e, stage) {
   e.preventDefault(); e.currentTarget.classList.remove('over');

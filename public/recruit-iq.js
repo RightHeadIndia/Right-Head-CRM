@@ -7,7 +7,43 @@ const DIMENSIONS = ['Skills', 'Relevant experience', 'Industry experience', 'Rol
 const DEFAULT_WEIGHTS = [30, 20, 15, 15, 10, 10];
 let state = { dashboard: {}, jobs: [], candidates: [], matches: [], processing: [] };
 let editingJobId = '';
+let currentPage = 'dashboard';
+const debounce = (callback, delay = 180) => {
+  let timer;
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => callback(...args), delay); };
+};
 const selectedForCompare = new Set();
+const selectedForDelete = { jobs: new Set(), candidates: new Set(), matches: new Set() };
+const BULK_TYPES = { jobs: ['job opening', '/jobs/bulk-delete'], candidates: ['candidate', '/candidates/bulk-delete'], matches: ['match report', '/matches/bulk-delete'] };
+function bulkToolbar(type) {
+  const [label] = BULK_TYPES[type];
+  return `<div class="riq-bulk-actions" data-bulk-toolbar="${type}" hidden><strong><span data-bulk-count="${type}">0</span> ${label}(s) selected</strong><button type="button" class="secondary-button" data-bulk-clear="${type}">Clear selection</button><button type="button" class="danger-button" data-bulk-delete="${type}">Delete selected</button></div>`;
+}
+function syncBulkActions() {
+  for (const type of Object.keys(BULK_TYPES)) {
+    const ids = selectedForDelete[type];
+    $$(`[data-bulk-toolbar="${type}"]`).forEach(bar => { bar.hidden = ids.size === 0; });
+    $$(`[data-bulk-count="${type}"]`).forEach(count => { count.textContent = ids.size; });
+    $$(`[data-bulk-all="${type}"]`).forEach(all => {
+      const visible = [...all.closest('table').querySelectorAll(`[data-bulk-select="${type}"]`)];
+      const checked = visible.filter(box => ids.has(box.dataset.id)).length;
+      all.checked = visible.length > 0 && visible.length === checked;
+      all.indeterminate = checked > 0 && checked < visible.length;
+    });
+    $$(`[data-bulk-select="${type}"]`).forEach(box => { box.checked = ids.has(box.dataset.id); });
+  }
+}
+async function deleteBulkRecords(type) {
+  const [label, path] = BULK_TYPES[type], ids = [...selectedForDelete[type]];
+  const consequence = type === 'candidates' ? ' Linked match reports and processed upload records will also be removed.' : type === 'jobs' ? ' Saved match reports will remain as archived results.' : '';
+  if (!ids.length || !confirm(`Delete ${ids.length} selected ${label}${ids.length === 1 ? '' : 's'}?${consequence} This cannot be undone.`)) return;
+  try {
+    const result = await api(path, { method: 'POST', body: JSON.stringify({ ids }) });
+    selectedForDelete[type].clear();
+    await refresh();
+    alert(`Deleted ${result.deleted} ${label}${result.deleted === 1 ? '' : 's'}.`);
+  } catch (error) { alert(error.message); }
+}
 async function api(path = '', options = {}) {
   const response = await fetch(`/api/recruit-iq${path}`, {
     headers: options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' },
@@ -57,14 +93,18 @@ function renderMetrics(dashboard) {
   $('#funnel').innerHTML = (dashboard.funnel || []).map(item => `<div class="riq-chart-row"><span>${escapeHtml(item.status)}</span><div class="riq-bar"><i style="width:${Math.round(item.count / maxFunnel * 100)}%"></i></div><b>${item.count}</b></div>`).join('') || '<p class="riq-empty">No candidates in the funnel yet.</p>';
 }
 function renderJobs() {
-  const rows = state.jobs.map(job => `<div class="riq-job-row"><strong>${escapeHtml(job.title)}</strong><span>${Number(job.candidates || 0)} candidates · ${job.requirements?.skills?.length || 0} skills</span><span class="riq-badge">${escapeHtml(job.status)}</span><span class="riq-actions"><button class="action-button" type="button" data-edit-job="${escapeHtml(job.id)}">Edit</button><button class="action-button" type="button" data-toggle-job="${escapeHtml(job.id)}">${job.status === 'Active' ? 'Close' : 'Reopen'}</button></span></div>`).join('');
-  $('#jobList').innerHTML = rows || '<p class="riq-empty">No job openings saved yet.</p>';
   const options = state.jobs.map(job => `<option value="${escapeHtml(job.id)}">${escapeHtml(job.title)}${job.status === 'Active' ? '' : ' (Closed)'}</option>`).join('');
   const activeOptions = state.jobs.filter(job => job.status === 'Active').map(job => `<option value="${escapeHtml(job.id)}">${escapeHtml(job.title)}</option>`).join('');
-  $('#uploadJob').innerHTML = activeOptions || '<option value="">Create an active job first</option>';
-  $('#matchJobFilter').innerHTML = `<option value="">All job openings</option>${options}`;
-  $('#exportJob').innerHTML = `<option value="">All job openings</option>${options}`;
-  $('#exportCandidate').innerHTML = `<option value="">All candidates</option>${state.candidates.map(candidate => `<option value="${escapeHtml(candidate.id)}">${escapeHtml(candidate.name)}</option>`).join('')}`;
+  if (currentPage === 'uploads') $('#uploadJob').innerHTML = activeOptions || '<option value="">Create an active job first</option>';
+  if (currentPage === 'matches') $('#matchJobFilter').innerHTML = `<option value="">All job openings</option>${options}`;
+  if (currentPage === 'reports') {
+    $('#exportJob').innerHTML = `<option value="">All job openings</option>${options}`;
+    $('#exportCandidate').innerHTML = `<option value="">All candidates</option>${state.candidates.map(candidate => `<option value="${escapeHtml(candidate.id)}">${escapeHtml(candidate.name)}</option>`).join('')}`;
+  }
+  if (currentPage !== 'jobs') return;
+  const rows = state.jobs.map(job => `<tr><td><input type="checkbox" data-bulk-select="jobs" data-id="${escapeHtml(job.id)}" aria-label="Select ${escapeHtml(job.title)}"></td><td><strong>${escapeHtml(job.title)}</strong></td><td>${Number(job.candidates || 0)}</td><td>${job.requirements?.skills?.length || 0}</td><td><span class="riq-badge">${escapeHtml(job.status)}</span></td><td><button class="action-button" type="button" data-edit-job="${escapeHtml(job.id)}">Edit</button><button class="action-button" type="button" data-toggle-job="${escapeHtml(job.id)}">${job.status === 'Active' ? 'Close' : 'Reopen'}</button></td></tr>`).join('');
+  $('#jobList').innerHTML = rows ? `${bulkToolbar('jobs')}<table class="riq-table"><thead><tr><th><input type="checkbox" data-bulk-all="jobs" aria-label="Select all visible jobs"></th><th>Job opening</th><th>Candidates</th><th>Skills</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="riq-empty">No job openings saved yet.</p>';
+  syncBulkActions();
 }
 function candidateFor(id) { return state.candidates.find(candidate => candidate.id === id); }
 function jobFor(id) { return state.jobs.find(job => job.id === id); }
@@ -144,7 +184,8 @@ function renderCandidates() {
       score >= minimum && score <= maximum && (!status || candidate.status === status) &&
       (!recruiter || candRecruiter === recruiter);
   });
-  $('#candidateList').innerHTML = rows.length ? `<table class="riq-table"><thead><tr><th>Candidate</th><th>Experience / location</th><th>Skills</th><th>Best match</th><th>Recruiter status</th><th>Actions</th></tr></thead><tbody>${rows.map(({ candidate, profile, loc, skills, best }) => `<tr><td><strong>${escapeHtml(candidate.name)}</strong><span class="candidate-email">${escapeHtml(candidate.email || 'Not Mentioned')} · ${escapeHtml(candidate.phone || 'Not Mentioned')}</span></td><td>${escapeHtml(profile.totalExperience || 'Not Mentioned')}<span class="candidate-email">${escapeHtml(loc)}</span></td><td>${escapeHtml(skills)}</td><td>${best ? `${best.total}% · ${escapeHtml(best.category)}${best.mandatoryMet ? '' : ' · Mandatory gap'}` : 'Not matched'}</td><td><select class="riq-status" data-status-id="${escapeHtml(candidate.id)}">${statusOptions(candidate.status)}</select></td><td><button class="action-button" type="button" data-profile-candidate="${escapeHtml(candidate.id)}">Profile</button><button class="action-button" type="button" data-edit-candidate="${escapeHtml(candidate.id)}">Notes / history</button><button class="action-button" type="button" data-export-candidate="${escapeHtml(candidate.id)}">Export</button><button class="action-button primary-match-btn" type="button" data-open-match="${escapeHtml(candidate.id)}" style="background:var(--brand-soft);color:var(--brand);border-color:var(--brand);font-weight:700">⚡ AI Match</button><div class="riq-inline" style="margin-top:4px"><select class="riq-status" aria-label="Select job for ${escapeHtml(candidate.name)}" data-rematch-job="${escapeHtml(candidate.id)}">${state.jobs.filter(job => job.status === 'Active').map(job => `<option value="${escapeHtml(job.id)}">${escapeHtml(job.title)}</option>`).join('') || '<option value="">No active jobs</option>'}</select><button class="action-button" type="button" data-rematch-candidate="${escapeHtml(candidate.id)}" ${state.jobs.some(job => job.status === 'Active') ? '' : 'disabled'}>Quick match</button></div></td></tr>`).join('')}</tbody></table>` : '<p class="riq-empty">No candidate records match these filters.</p>';
+  $('#candidateList').innerHTML = rows.length ? `${bulkToolbar('candidates')}<table class="riq-table"><thead><tr><th><input type="checkbox" data-bulk-all="candidates" aria-label="Select all visible candidates"></th><th>Candidate</th><th>Experience / location</th><th>Skills</th><th>Best match</th><th>Recruiter status</th><th>Actions</th></tr></thead><tbody>${rows.map(({ candidate, profile, loc, skills, best }) => `<tr><td><input type="checkbox" data-bulk-select="candidates" data-id="${escapeHtml(candidate.id)}" aria-label="Select ${escapeHtml(candidate.name)}"></td><td><strong>${escapeHtml(candidate.name)}</strong><span class="candidate-email">${escapeHtml(candidate.email || 'Not Mentioned')} · ${escapeHtml(candidate.phone || 'Not Mentioned')}</span></td><td>${escapeHtml(profile.totalExperience || 'Not Mentioned')}<span class="candidate-email">${escapeHtml(loc)}</span></td><td>${escapeHtml(skills)}</td><td>${best ? `${best.total}% · ${escapeHtml(best.category)}${best.mandatoryMet ? '' : ' · Mandatory gap'}` : 'Not matched'}</td><td><select class="riq-status" data-status-id="${escapeHtml(candidate.id)}">${statusOptions(candidate.status)}</select></td><td><button class="action-button" type="button" data-profile-candidate="${escapeHtml(candidate.id)}">Profile</button><button class="action-button" type="button" data-edit-candidate="${escapeHtml(candidate.id)}">Notes / history</button><button class="action-button" type="button" data-export-candidate="${escapeHtml(candidate.id)}">Export</button><button class="action-button primary-match-btn" type="button" data-open-match="${escapeHtml(candidate.id)}" style="background:var(--brand-soft);color:var(--brand);border-color:var(--brand);font-weight:700">⚡ AI Match</button><div class="riq-inline" style="margin-top:4px"><select class="riq-status" aria-label="Select job for ${escapeHtml(candidate.name)}" data-rematch-job="${escapeHtml(candidate.id)}">${state.jobs.filter(job => job.status === 'Active').map(job => `<option value="${escapeHtml(job.id)}">${escapeHtml(job.title)}</option>`).join('') || '<option value="">No active jobs</option>'}</select><button class="action-button" type="button" data-rematch-candidate="${escapeHtml(candidate.id)}" ${state.jobs.some(job => job.status === 'Active') ? '' : 'disabled'}>Quick match</button></div></td></tr>`).join('')}</tbody></table>` : '<p class="riq-empty">No candidate records match these filters.</p>';
+  syncBulkActions();
 }
 function statusOptions(selected) { return STATUSES.map(status => `<option ${status === selected ? 'selected' : ''}>${escapeHtml(status)}</option>`).join(''); }
 function renderMatches() {
@@ -159,7 +200,8 @@ function renderMatches() {
       return true;
     })
     .sort((a, b) => b.match.total - a.match.total);
-  $('#matchList').innerHTML = rows.length ? `<table class="riq-table"><thead><tr><th>Compare</th><th>Candidate</th><th>Job</th><th>Score</th><th>Relevant experience</th><th>Skills</th><th>Recommendation</th><th></th></tr></thead><tbody>${rows.map(({ match, candidate, job }, index) => `<tr><td><input aria-label="Select ${escapeHtml(candidate.name)} to compare" type="checkbox" data-compare="${escapeHtml(match.id)}" ${selectedForCompare.has(match.id) ? 'checked' : ''}></td><td><strong>${index + 1}. ${escapeHtml(candidate.name)}</strong><span class="candidate-email">${escapeHtml(candidate.email || 'Not Mentioned')}</span></td><td>${escapeHtml(job?.title || 'Archived job')}</td><td><span class="riq-badge">${match.total}% · ${escapeHtml(match.category)}</span>${match.mandatoryMet ? '' : '<span class="riq-badge alert" style="margin-left:4px">Mandatory gap</span>'}</td><td>${escapeHtml(match.relevantExperience || 'Not Mentioned')}</td><td><strong>Matched:</strong> ${escapeHtml((match.matchedSkills || []).join(', ') || 'None')}<br><strong>Missing:</strong> ${escapeHtml((match.missingSkills || []).join(', ') || 'None')}</td><td>${escapeHtml(match.recommendation || '')}</td><td><button class="action-button" type="button" data-match-detail="${escapeHtml(match.id)}">Evidence</button></td></tr>`).join('')}</tbody></table>` : '<p class="riq-empty">No saved matching results for this filter.</p>';
+  $('#matchList').innerHTML = rows.length ? `${bulkToolbar('matches')}<table class="riq-table"><thead><tr><th><input type="checkbox" data-bulk-all="matches" aria-label="Select all visible match reports"></th><th>Compare</th><th>Candidate</th><th>Job</th><th>Score</th><th>Relevant experience</th><th>Skills</th><th>Recommendation</th><th></th></tr></thead><tbody>${rows.map(({ match, candidate, job }, index) => `<tr><td><input type="checkbox" data-bulk-select="matches" data-id="${escapeHtml(match.id)}" aria-label="Select match report for ${escapeHtml(candidate.name)}"></td><td><input aria-label="Select ${escapeHtml(candidate.name)} to compare" type="checkbox" data-compare="${escapeHtml(match.id)}" ${selectedForCompare.has(match.id) ? 'checked' : ''}></td><td><strong>${index + 1}. ${escapeHtml(candidate.name)}</strong><span class="candidate-email">${escapeHtml(candidate.email || 'Not Mentioned')}</span></td><td>${escapeHtml(job?.title || 'Archived job')}</td><td><span class="riq-badge">${match.total}% · ${escapeHtml(match.category)}</span>${match.mandatoryMet ? '' : '<span class="riq-badge alert" style="margin-left:4px">Mandatory gap</span>'}</td><td>${escapeHtml(match.relevantExperience || 'Not Mentioned')}</td><td><strong>Matched:</strong> ${escapeHtml((match.matchedSkills || []).join(', ') || 'None')}<br><strong>Missing:</strong> ${escapeHtml((match.missingSkills || []).join(', ') || 'None')}</td><td>${escapeHtml(match.recommendation || '')}</td><td><button class="action-button" type="button" data-match-detail="${escapeHtml(match.id)}">Evidence</button></td></tr>`).join('')}</tbody></table>` : '<p class="riq-empty">No saved matching results for this filter.</p>';
+  syncBulkActions();
 }
 function renderShortlist() {
   const statuses = ['Shortlisted', 'Interview Scheduled', 'Interviewed', 'Selected', 'Offered', 'Joined'];
@@ -176,27 +218,36 @@ function renderShortlist() {
   const matchMap = new Map();
   for (const match of state.matches) matchMap.set(match.candidateId, [...(matchMap.get(match.candidateId) || []), match]);
   const rows = candidateRows(candidates, matchMap);
-  $('#shortlistList').innerHTML = rows.length ? `<table class="riq-table"><thead><tr><th>Candidate</th><th>Job match</th><th>Status</th><th>Recruiter</th><th>Follow-up</th><th>Actions</th></tr></thead><tbody>${rows.map(({ candidate, best }) => `<tr><td><strong>${escapeHtml(candidate.name)}</strong><span class="candidate-email">${escapeHtml(candidate.email || '')} · ${escapeHtml(candidate.phone || '')}</span></td><td>${best ? `${best.total}% · ${escapeHtml(jobFor(best.jobId)?.title || 'Archived job')}` : 'Not matched'}</td><td>${escapeHtml(candidate.status)}</td><td>${escapeHtml(candidate.recruiter || 'Not assigned')}</td><td>${escapeHtml(candidate.followUpDate || '—')}</td><td><button class="action-button" type="button" data-edit-candidate="${escapeHtml(candidate.id)}">Update</button></td></tr>`).join('')}</tbody></table>` : '<p class="riq-empty">No candidates have recruiter statuses in the shortlist funnel.</p>';
+  $('#shortlistList').innerHTML = rows.length ? `${bulkToolbar('candidates')}<table class="riq-table"><thead><tr><th><input type="checkbox" data-bulk-all="candidates" aria-label="Select all visible shortlisted candidates"></th><th>Candidate</th><th>Job match</th><th>Status</th><th>Recruiter</th><th>Follow-up</th><th>Actions</th></tr></thead><tbody>${rows.map(({ candidate, best }) => `<tr><td><input type="checkbox" data-bulk-select="candidates" data-id="${escapeHtml(candidate.id)}" aria-label="Select ${escapeHtml(candidate.name)}"></td><td><strong>${escapeHtml(candidate.name)}</strong><span class="candidate-email">${escapeHtml(candidate.email || '')} · ${escapeHtml(candidate.phone || '')}</span></td><td>${best ? `${best.total}% · ${escapeHtml(jobFor(best.jobId)?.title || 'Archived job')}` : 'Not matched'}</td><td>${escapeHtml(candidate.status)}</td><td>${escapeHtml(candidate.recruiter || 'Not assigned')}</td><td>${escapeHtml(candidate.followUpDate || '—')}</td><td><button class="action-button" type="button" data-edit-candidate="${escapeHtml(candidate.id)}">Update</button></td></tr>`).join('')}</tbody></table>` : '<p class="riq-empty">No candidates have recruiter statuses in the shortlist funnel.</p>';
+  syncBulkActions();
 }
 function renderAll() {
   updateRecruiterFilterOptions();
-  renderMetrics(state.dashboard || {});
   renderJobs();
-  renderProcessing();
-  renderCandidates();
-  renderMatches();
-  renderShortlist();
+  if (currentPage === 'dashboard') renderMetrics(state.dashboard || {});
+  else if (currentPage === 'uploads') renderProcessing();
+  else if (currentPage === 'candidates') renderCandidates();
+  else if (currentPage === 'matches') renderMatches();
+  else if (currentPage === 'shortlisted') renderShortlist();
 }
 async function refresh() {
-  const next = await api('');
-  state = next;
+  const view = currentPage;
+  const next = await api(`?view=${encodeURIComponent(view)}`);
+  state = { ...state, ...next };
+  const validIds = {
+    jobs: new Set((next.jobs || []).map(job => job.id)),
+    candidates: new Set((next.candidates || []).map(candidate => candidate.id)),
+    matches: new Set((next.matches || []).map(match => match.id))
+  };
+  for (const type of Object.keys(selectedForDelete)) if (next[type]) for (const id of selectedForDelete[type]) if (!validIds[type].has(id)) selectedForDelete[type].delete(id);
+  if (next.matches) for (const id of selectedForCompare) if (!validIds.matches.has(id)) selectedForCompare.delete(id);
   renderAll();
 }
 function choosePage(page) {
+  currentPage = page;
   $$('.riq-tabs [role=tab]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.page === page)));
   $$('[data-view]').forEach(view => { view.hidden = view.dataset.view !== page; });
-  if (page === 'candidates') renderCandidates();
-  if (page === 'matches') renderMatches();
+  refresh().catch(error => alert(error.message));
 }
 function loadJobIntoForm(job) {
   editingJobId = job?.id || '';
@@ -318,6 +369,28 @@ function init() {
   $('#candidateStatusFilter').innerHTML = `<option value="">All statuses</option>${STATUSES.map(status => `<option>${escapeHtml(status)}</option>`).join('')}`;
   $('#dialogStatus').innerHTML = statusOptions('Hold');
   $$('.riq-tabs [role=tab]').forEach(button => button.addEventListener('click', () => choosePage(button.dataset.page)));
+  document.body.addEventListener('change', event => {
+    const selectAll = event.target.closest('[data-bulk-all]');
+    if (selectAll) {
+      const type = selectAll.dataset.bulkAll;
+      selectAll.closest('table').querySelectorAll(`[data-bulk-select="${type}"]`).forEach(box => {
+        if (selectAll.checked) selectedForDelete[type].add(box.dataset.id);
+        else selectedForDelete[type].delete(box.dataset.id);
+      });
+      syncBulkActions();
+      return;
+    }
+    const checkbox = event.target.closest('[data-bulk-select]');
+    if (!checkbox) return;
+    const ids = selectedForDelete[checkbox.dataset.bulkSelect];
+    if (checkbox.checked) ids.add(checkbox.dataset.id); else ids.delete(checkbox.dataset.id);
+    syncBulkActions();
+  });
+  document.body.addEventListener('click', event => {
+    const remove = event.target.closest('[data-bulk-delete]'), clear = event.target.closest('[data-bulk-clear]');
+    if (remove) deleteBulkRecords(remove.dataset.bulkDelete);
+    if (clear) { selectedForDelete[clear.dataset.bulkClear].clear(); syncBulkActions(); }
+  });
   $('#refreshButton').addEventListener('click', () => refresh().catch(error => alert(error.message)));
   $('#jobForm').addEventListener('submit', async event => {
     event.preventDefault();
@@ -402,14 +475,14 @@ function init() {
   ['#candidateSearch', '#candidateLocation', '#candidateExperience', '#candidateDesignation', '#candidateSkill', '#candidateEducation', '#candidateMinimum', '#candidateMaximum', '#candidateStatusFilter', '#candidateRecruiterFilter'].forEach(selector => {
     const el = $(selector);
     if (el) {
-      el.addEventListener('input', renderCandidates);
+      el.addEventListener('input', debounce(renderCandidates));
       el.addEventListener('change', renderCandidates);
     }
   });
   ['#shortlistSearch', '#shortlistRecruiterFilter', '#shortlistStatusFilter'].forEach(selector => {
     const el = $(selector);
     if (el) {
-      el.addEventListener('input', renderShortlist);
+      el.addEventListener('input', debounce(renderShortlist));
       el.addEventListener('change', renderShortlist);
     }
   });
@@ -492,8 +565,8 @@ function init() {
   });
   $('#matchJobFilter').addEventListener('change', renderMatches);
   if ($('#matchRecruiterFilter')) $('#matchRecruiterFilter').addEventListener('change', renderMatches);
-  $('#matchSearch').addEventListener('input', renderMatches);
-  $('#matchMinimum').addEventListener('input', renderMatches);
+  $('#matchSearch').addEventListener('input', debounce(renderMatches));
+  $('#matchMinimum').addEventListener('input', debounce(renderMatches));
   $('#matchList').addEventListener('change', event => {
     const checkbox = event.target.closest('[data-compare]'); if (!checkbox) return;
     if (checkbox.checked && selectedForCompare.size >= 2) { checkbox.checked = false; return alert('Select no more than two results.'); }

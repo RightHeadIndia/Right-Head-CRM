@@ -1,6 +1,10 @@
 const STAGES = ['Screening', 'Interview', 'Shortlisted', 'Offer', 'Joining', 'Joined', 'Rejected', 'Blacklisted', 'Withdrawn'];
 const $ = selector => document.querySelector(selector);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+function debounce(callback, delay = 180) {
+  let timer;
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => callback(...args), delay); };
+}
 let candidates = [];
 let cvShares = [];
 let recruiterDirectory = [];
@@ -40,15 +44,16 @@ const api = async (url, method = 'GET', body) => {
 };
 
 function renderRecruiterOptions() {
-  const names = new Set(recruiterDirectory.map(p => p.name.trim()).filter(Boolean));
-  (candidates || []).forEach(c => {
-    if (c.recruiter && c.recruiter.trim()) names.add(c.recruiter.trim());
-    (c.interviews || []).forEach(i => { if (i.recruiter && i.recruiter.trim()) names.add(i.recruiter.trim()); });
-  });
-  (cvShares || []).forEach(s => {
-    if (s.recruiter && s.recruiter.trim()) names.add(s.recruiter.trim());
-  });
-  const sorted = [...names].sort((a, b) => a.localeCompare(b));
+  const candidateNames = new Set([
+    ...(candidates || []).map(candidate => candidate.name),
+    ...(cvShares || []).map(share => share.candidateName)
+  ].map(value => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase()).filter(Boolean));
+  const nonNames = new Set(['confirmed', 'awaiting confirmation', 'to be aligned', 'selected', 'rejected', 'shortlisted', 'interview', 'screening', 'offer', 'joining', 'joined', 'on hold', 'not selected']);
+  const isRecruiterName = value => {
+    const name = String(value || '').trim().replace(/\s+/g, ' ');
+    return name.length >= 2 && /[a-z]/i.test(name) && !/[\d@]/.test(name) && !/\b(?:gmail|yahoo|outlook|hotmail)\b/i.test(name) && !/^\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(name) && !nonNames.has(name.toLocaleLowerCase()) && !candidateNames.has(name.toLocaleLowerCase());
+  };
+  const sorted = [...new Set(recruiterDirectory.map(person => String(person.name || '').trim()).filter(isRecruiterName))].sort((a, b) => a.localeCompare(b));
 
   const options = sorted.map(name => `<option value="${escapeHTML(name)}"></option>`).join('');
   if ($('#recruiterNames')) $('#recruiterNames').innerHTML = options;
@@ -58,6 +63,11 @@ function renderRecruiterOptions() {
     filter.innerHTML = `<option value="">All recruiters</option>${sorted.map(name => `<option value="${escapeHTML(name)}">${escapeHTML(name)}</option>`).join('')}`;
     if ([...filter.options].some(option => option.value === selected)) filter.value = selected;
   }
+  const directoryHTML = sorted.map(name => {
+    const person = recruiterDirectory.find(item => item.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+    return `<div class="recruiter-directory-row"><span>${escapeHTML(name)}</span><button class="secondary-button" type="button" data-rename-recruiter="${escapeHTML(person?.id || '')}" data-recruiter-name="${escapeHTML(name)}">Rename</button><button class="action-button delete" type="button" data-delete-recruiter="${escapeHTML(person?.id || '')}" data-recruiter-name="${escapeHTML(name)}">Delete</button></div>`;
+  }).join('') || '<p class="muted">No recruiters yet.</p>';
+  ['#recruiterDirectory', '#analyticsRecruiterDirectory'].forEach(selector => { const directory = $(selector); if (directory) directory.innerHTML = directoryHTML; });
 }
 async function loadRecruiters() {
   try { recruiterDirectory = await api('/ta-recruiters'); renderRecruiterOptions(); renderWeekly(); renderRecruiterAnalytics(); }
@@ -71,6 +81,12 @@ async function saveRecruiterName(value) {
   recruiterDirectory.sort((a, b) => a.name.localeCompare(b.name));
   renderRecruiterOptions();
   return saved.name;
+}
+async function addRecruiterFromInput(inputId) {
+  const input = $(inputId), name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  try { await saveRecruiterName(name); input.value = ''; await loadWeekly(); $('#weeklyMessage').textContent = `${name} added to the recruiter directory.`; $('#weeklyMessage').hidden = false; }
+  catch (error) { $('#weeklyMessage').textContent = error.message; $('#weeklyMessage').hidden = false; }
 }
 
 function populateStageOptions() {
@@ -91,6 +107,34 @@ function displayDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '”?' : date.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
 }
+function formatInterviewDate(value) {
+  const key = normalizedDateKey(value);
+  const match = key.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return '—';
+  const [, year, month, day] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+  if (date.getFullYear() !== Number(year) || date.getMonth() !== Number(month) - 1 || date.getDate() !== Number(day)) return '—';
+  const monthLabel = new Intl.DateTimeFormat('en', { month: 'short' }).format(date);
+  return `${day}/${monthLabel}/${year}`;
+}
+function formatInterviewTime(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    const serial = Number(raw), fraction = serial >= 1 ? serial % 1 : serial;
+    if (fraction >= 0 && fraction < 1 && serial < 100000) {
+      const minutes = Math.round(fraction * 1440) % 1440;
+      return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+    }
+  }
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(am|pm)?$/i);
+  if (!match) return raw;
+  let hours = Number(match[1]);
+  const suffix = match[3]?.toLowerCase();
+  if (suffix) { if (hours === 12) hours = 0; if (suffix === 'pm') hours += 12; }
+  if (hours > 23 || Number(match[2]) > 59) return raw;
+  return `${String(hours).padStart(2, '0')}:${match[2]}`;
+}
 function normalizedDateKey(value) {
   if (!value) return '';
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? '' : localDateKey(value);
@@ -100,6 +144,13 @@ function normalizedDateKey(value) {
     return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
   }
   const text = String(value).trim();
+  if (/^\d{4,6}(?:\.\d+)?$/.test(text)) {
+    const serial = Number(text);
+    if (serial >= 20000 && serial <= 100000) {
+      const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000);
+      return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+    }
+  }
   let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (match && Number(match[2]) >= 1 && Number(match[2]) <= 12 && Number(match[3]) >= 1 && Number(match[3]) <= 31) return `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
   match = text.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
@@ -110,6 +161,12 @@ function normalizedDateKey(value) {
     if (day > 12 && month <= 12) [day, month] = [month, day];
     const year = Number(match[3]), check = new Date(year, month - 1, day);
     if (year > 0 && check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day) return `${match[3]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+  match = text.match(/^(\d{1,2})[\s/-]+([a-z]{3,})[\s,/-]+(\d{4})$/i);
+  if (match) {
+    const month = new Date(`${match[2]} 1, 2000`).getMonth() + 1, day = Number(match[1]), year = Number(match[3]);
+    const check = new Date(year, month - 1, day);
+    if (month && check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day) return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   }
   const parsed = new Date(text);
   return Number.isNaN(parsed.getTime()) ? '' : localDateKey(parsed);
@@ -180,7 +237,7 @@ function updateMetrics() {
   $('#totalCount').textContent = filtered.length;
   $('#activeCount').textContent = filtered.filter(item => ['Screening', 'Interview', 'Shortlisted', 'Offer'].includes(item.stage)).length;
   $('#interviewCount').textContent = filtered.filter(item => item.stage === 'Interview').length;
-  $('#hiredCount').textContent = filtered.filter(item => item.stage === 'Joining').length;
+  $('#hiredCount').textContent = filtered.filter(item => ['Joining', 'Joined'].includes(item.stage)).length;
 }
 function render() {
   updateMetrics();
@@ -210,10 +267,12 @@ async function loadCandidates() {
   showError('');
   try {
     candidates = await api('/candidates');
+    renderRecruiterOptions();
     populateYearFilters();
     const existingIds = new Set(candidates.map(candidate => candidate.id));
     for (const id of selectedCandidateIds) if (!existingIds.has(id)) selectedCandidateIds.delete(id);
     render();
+    renderRecruiterAnalytics();
   } catch (error) {
     showError(error.message);
   }
@@ -245,8 +304,17 @@ function openDialog(candidate) {
   $('#dialogTitle').textContent = candidate ? 'Edit candidate' : 'Add candidate';
   $('#saveCandidate').textContent = candidate ? 'Save changes' : 'Save candidate';
   if (candidate) {
-      for (const field of ['name', 'role', 'stage', 'email', 'phone', 'source', 'notes', 'company', 'recruiter', 'month', 'interviewDate', 'sharedDate', 'shortlistedDate', 'offeredDate', 'rejectedDate', 'finalCall', 'doj', 'feedback', 'remarks']) {
-      form.elements[field].value = candidate[field] || (field === 'stage' ? 'Screening' : '');
+      const latestInterview = candidate.interviews?.at(-1) || {};
+      const interviewValues = {
+        recruiter: latestInterview.recruiter, company: latestInterview.company, role: latestInterview.role,
+        interviewDate: latestInterview.date, interviewMode: latestInterview.mode, interviewTime: latestInterview.time,
+        interviewStatus: latestInterview.candidateStatus, clientStatus: latestInterview.clientStatus,
+        contactDetails: latestInterview.contactDetails, email: latestInterview.email, phone: latestInterview.phone,
+        remarks: latestInterview.remarks
+      };
+      for (const field of ['name', 'role', 'stage', 'email', 'phone', 'source', 'notes', 'company', 'recruiter', 'month', 'interviewDate', 'interviewMode', 'interviewTime', 'interviewStatus', 'clientStatus', 'contactDetails', 'sharedDate', 'shortlistedDate', 'offeredDate', 'rejectedDate', 'finalCall', 'doj', 'feedback', 'remarks']) {
+      const value = candidate[field] || interviewValues[field] || (field === 'stage' ? 'Screening' : '');
+      form.elements[field].value = field === 'interviewTime' ? formatInterviewTime(value) : value;
     }
   } else {
     form.elements.stage.value = 'Screening';
@@ -265,6 +333,13 @@ async function submitCandidate(event) {
   $('#formError').textContent = '';
   try {
     values.recruiter = await saveRecruiterName(values.recruiter);
+    const existing = candidates.find(candidate => candidate.id === id);
+    if (existing?.interviews?.length) {
+      const interviewFields = { interviewDate: 'date', interviewMode: 'mode', interviewTime: 'time', interviewStatus: 'candidateStatus', clientStatus: 'clientStatus', contactDetails: 'contactDetails' };
+      values.interviews = existing.interviews.map((interview, index) => index === existing.interviews.length - 1
+        ? { ...interview, ...Object.fromEntries(Object.entries(interviewFields).map(([formField, recordField]) => [recordField, values[formField] || ''])), recruiter: values.recruiter, company: values.company, role: values.role, email: values.email, phone: values.phone, remarks: values.remarks }
+        : interview);
+    }
     await api(id ? `/candidates/${encodeURIComponent(id)}` : '/candidates', id ? 'PUT' : 'POST', values);
     $('#candidateDialog').close();
     await loadCandidates();
@@ -447,7 +522,7 @@ $('#deleteSelectedImportArchives').addEventListener('click', async () => {
   catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
 });
 $('#refreshImportHistory').addEventListener('click', async () => { await Promise.all([loadImportReports(), loadCvShares()]); });
-$('#search').addEventListener('input', render);
+$('#search').addEventListener('input', debounce(render));
 $('#stageFilter').addEventListener('change', render);
 function persistDateFilters() {
   saveTalentViewState({ month: $('#filterMonth').value, date: $('#filterDate').value, year: $('#filterYear').value, recruiter: $('#recruiterFilter').value, sort: $('#dateSort').value });
@@ -472,6 +547,12 @@ const trackerSearch = name => document.querySelector(`[data-search="${name}"]`)?
 const candidateMatch = (candidate, query) => [candidate.name, candidate.company, candidate.role, candidate.recruiter, candidate.stage, candidate.feedback, candidate.remarks].some(value => String(value || '').toLowerCase().includes(query));
 const td = value => `<td>${escapeHTML(value || '”?')}</td>`;
 const stageSelect = candidate => `<select class="stage-select" data-candidate-stage="${escapeHTML(candidate.id)}" aria-label="Status for ${escapeHTML(candidate.name)}">${STAGES.map(stage => `<option ${candidate.stage === stage ? 'selected' : ''}>${stage}</option>`).join('')}</select>`;
+const interviewContact = (interview, candidate) => {
+  const details = String(interview.contactDetails || '').trim();
+  const supplemental = [interview.email || candidate.email, interview.phone || candidate.phone]
+    .map(value => String(value || '').trim()).filter(value => value && !details.toLowerCase().includes(value.toLowerCase()));
+  return [details, ...new Set(supplemental)].filter(Boolean).join(' · ');
+};
 function recruiterIdentity(record, nameField = 'candidateName') {
   const email = String(record.email || '').trim().toLowerCase();
   const phone = String(record.phone || '').replace(/\D/g, '').slice(-10);
@@ -681,7 +762,7 @@ function renderRecruiterAnalytics() {
   });
   const rows = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
   const selectedRecruiter = $('#recruiterFilter')?.value || '';
-  const visibleRows = selectedRecruiter ? rows.filter(row => row.name.toLocaleLowerCase() === selectedRecruiter.toLocaleLowerCase()) : rows;
+  const visibleRows = rows;
   const totals = visibleRows.reduce((sum, row) => ({ cvShares: sum.cvShares + row.cvShares, profiles: sum.profiles + row.profiles.size, shortlisted: sum.shortlisted + row.shortlisted.size, interviews: sum.interviews + row.interviews, selected: sum.selected + row.selected.size, rejected: sum.rejected + row.rejected.size }), { cvShares: 0, profiles: 0, shortlisted: 0, interviews: 0, selected: 0, rejected: 0 });
   const metricCards = [['CVs shared', totals.cvShares], ['Profiles shared', totals.profiles], ['Shortlisted', totals.shortlisted], ['Interviews conducted', totals.interviews], ['Selected / offered', totals.selected], ['Rejected', totals.rejected]];
   $('#recruiterAnalyticsMetrics').innerHTML = metricCards.map(([label, value]) => `<article class="recruiter-analytics-metric"><span>${label}</span><strong>${value}</strong></article>`).join('');
@@ -691,7 +772,7 @@ function renderRecruiterAnalytics() {
   $('#recruiterAnalytics').innerHTML = visibleRows.map(row => {
     const values = { cvShares: row.cvShares, profiles: row.profiles.size, shortlisted: row.shortlisted.size, interviews: row.interviews, selected: row.selected.size, rejected: row.rejected.size };
     const bars = metrics.map(([label, key]) => `<div class="recruiter-analytics-bar"><span>${label}</span><div class="riq-bar"><i style="width:${Math.round(values[key] / maxByMetric[key] * 100)}%"></i></div><strong>${values[key]}</strong></div>`).join('');
-    const details = selectedRecruiter ? renderRecruiterRecordDetails(row.name) : '';
+    const details = selectedRecruiter && row.name.toLocaleLowerCase() === selectedRecruiter.toLocaleLowerCase() ? renderRecruiterRecordDetails(row.name) : '';
     return `<article class="recruiter-analytics-card"><div class="recruiter-analytics-head"><h3>${escapeHTML(row.name)}</h3><span>${values.profiles} unique profiles shared</span></div><div class="recruiter-analytics-counts"><div><span>CV shares</span><strong>${values.cvShares}</strong></div><div><span>Shortlisted</span><strong>${values.shortlisted}</strong></div><div><span>Interviews</span><strong>${values.interviews}</strong></div><div><span>Selected</span><strong>${values.selected}</strong></div><div><span>Rejected</span><strong>${values.rejected}</strong></div></div><div class="recruiter-analytics-bars">${bars}</div>${details}</article>`;
   }).join('');
   renderRecruiterWeekly(visibleRows);
@@ -719,7 +800,7 @@ function renderTrackers() {
     return entries.map(entry => ({ candidate: c, entry }));
   }).filter(({ candidate: c, entry: i }) => dateFilterMatch(candidateDate(c, i)) && recruiterFilterMatches(i.recruiter || c.recruiter) && candidateMatch({ ...c, company: i.company || c.company, role: i.role || c.role, recruiter: i.recruiter || c.recruiter, stage: i.candidateStatus || c.stage, feedback: i.remarks || c.feedback, remarks: i.clientStatus || c.clientStatus }, interviewQuery));
   sortByDate(interviewRows);
-  $('#interviewRows').innerHTML = interviewRows.map(({ candidate: c, entry: i }) => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.name)}${td(i.recruiter || c.recruiter)}${td(i.date || c.interviewDate)}${td(i.company || c.company)}${td(i.role || c.role)}${td(i.mode || c.interviewMode)}${td(i.time || c.interviewTime)}<td>${stageSelect(c)}<small class="raw-status">${escapeHTML(i.candidateStatus || '')}</small></td>${td(i.clientStatus || c.clientStatus)}${td(i.contactDetails || [i.email || c.email, i.phone || c.phone].filter(Boolean).join(' · '))}${td(i.remarks || c.remarks || c.feedback)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
+  $('#interviewRows').innerHTML = interviewRows.map(({ candidate: c, entry: i }) => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.name)}${td(i.recruiter || c.recruiter)}${td(formatInterviewDate(i.date || c.interviewDate))}${td(i.company || c.company)}${td(i.role || c.role)}${td(i.mode || c.interviewMode)}${td(formatInterviewTime(i.time || c.interviewTime))}<td>${stageSelect(c)}<small class="raw-status">${escapeHTML(i.candidateStatus || c.interviewStatus || c.stage || '')}</small></td>${td(i.clientStatus || c.clientStatus)}${td(interviewContact(i, c))}${td(i.remarks || c.remarks || c.feedback)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
   $('#interviewEmpty').hidden = interviewRows.length > 0;
   const offerQuery = trackerSearch('offers');
   const offerCandidates = candidates.filter(c => ['Shortlisted', 'Offer', 'Joining'].includes(c.stage) && dateFilterMatch(offerDate(c)) && candidateMatchesRecruiter(c) && candidateMatch(c, offerQuery));
@@ -769,7 +850,7 @@ function renderCvShares() {
   $('#cvShareNextPage').disabled = cvSharePage >= pageCount - 1;
 }
 async function loadCvShares() {
-  try { cvShares = await api('/ta-cv-shares'); const ids = new Set(cvShares.map(share => share.id)); for (const id of selectedCvShareIds) if (!ids.has(id)) selectedCvShareIds.delete(id); for (const id of selectedImportedShareIds) if (!ids.has(id)) selectedImportedShareIds.delete(id); populateYearFilters(); render(); }
+  try { cvShares = await api('/ta-cv-shares'); renderRecruiterOptions(); const ids = new Set(cvShares.map(share => share.id)); for (const id of selectedCvShareIds) if (!ids.has(id)) selectedCvShareIds.delete(id); for (const id of selectedImportedShareIds) if (!ids.has(id)) selectedImportedShareIds.delete(id); populateYearFilters(); render(); renderRecruiterAnalytics(); }
   catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
 }
 function renderImportedShareHistory() {
@@ -843,7 +924,7 @@ function renderWeekly() {
     const metricRows = TA_METRICS.map(metric => `<tr><th scope="row">${escapeHTML(metric)}</th>${days.map((dayKey, index) => {
       const day = TA_DAYS[index], people = dateFilterMatch(dayKey) ? metricCandidates(recruiter, metric, dayKey) : [];
       const cell = report?.manual?.[metric]?.[day] || {};
-      const target = metric === TA_METRICS[0] ? 4 : Number(cell.target) || '';
+      const target = metric === TA_METRICS[0] ? (cell.target ?? 4) : (cell.target ?? '');
       const result = metric === TA_METRICS[3] ? people.map(c => c.name).join(', ') || '”?' : String(people.length);
       const ratio = metric === TA_METRICS[0] ? `${Math.round(people.length / 4 * 100)}%` : '';
       const achievement = Number(cell.achievement) || 0;
@@ -851,7 +932,7 @@ function renderWeekly() {
       const achievementLabel = metric === TA_METRICS[0] ? `${achievement} of 4 · ${met ? 'Target met' : `${Math.round(achievement / 4 * 100)}% of target`}` : String(cell.achievement ?? '');
       return `<td class="week-cell"><div class="week-result${people.length ? ' has-result' : ''}" title="${metric === TA_METRICS[0] ? 'Result for the day, from CV Shared records for this recruiter and date' : 'Result for the day, from candidate records'}"><span class="result-value">${escapeHTML(result)}</span>${ratio ? `<span class="result-ratio">${escapeHTML(ratio)} of target</span>` : ''}</div><label>Achievement<input type="number" min="0" max="100000" step="1" data-recruiter="${escapeHTML(recruiter)}" data-metric="${escapeHTML(metric)}" data-day="${day}" data-field="achievement" value="${escapeHTML(cell.achievement ?? '')}"></label><small class="achievement-note${achievement ? ' met' : ''}">${escapeHTML(achievementLabel || 'Result is automatic; achievement is entered manually.')}</small></td>`;
     }).join('')}</tr>`).join('');
-    return `<section class="recruiter-week"><div class="recruiter-week-heading"><h3>${escapeHTML(recruiter)}</h3><button class="action-button delete" type="button" data-remove-recruiter="${escapeHTML(recruiter)}">Remove</button></div><div class="table-wrap"><table class="weekly-table"><thead><tr><th>Metric</th>${TA_DAYS.map((day, i) => `<th>${day}<small>${days[i].slice(5)}</small></th>`).join('')}</tr></thead><tbody>${metricRows}</tbody></table></div></section>`;
+    return `<section class="recruiter-week"><div class="recruiter-week-heading"><h3>${escapeHTML(recruiter)}</h3><button class="primary-button" type="button" data-save-weekly-recruiter="${escapeHTML(recruiter)}">Save this recruiter</button></div><div class="table-wrap"><table class="weekly-table"><thead><tr><th>Metric</th>${TA_DAYS.map((day, i) => `<th>${day}<small>${days[i].slice(5)}</small></th>`).join('')}</tr></thead><tbody>${metricRows}</tbody></table></div></section>`;
   }).join('') || '<div class="empty-state compact"><strong>No recruiters yet</strong><p>Add a recruiter or assign candidates to a recruiter in their profile.</p></div>';
   renderRecruiterAnalytics();
 }
@@ -859,9 +940,9 @@ async function loadWeekly() {
   try { weeklyReports = await api(`/ta-weekly?week=${encodeURIComponent($('#weekStart').value)}`); renderWeekly(); }
   catch (error) { $('#weeklyMessage').textContent = error.message; $('#weeklyMessage').hidden = false; }
 }
-async function saveWeekly() {
-  const inputs = [...document.querySelectorAll('#weeklyRows input[data-field]')];
-  const recruiters = [...new Set(inputs.map(input => input.dataset.recruiter))];
+async function saveWeekly(onlyRecruiter = '') {
+  const inputs = [...document.querySelectorAll('#weeklyRows input[data-field]')].filter(input => !onlyRecruiter || input.dataset.recruiter === onlyRecruiter);
+  const recruiters = onlyRecruiter ? [onlyRecruiter] : [...new Set(inputs.map(input => input.dataset.recruiter))];
   try {
     for (const recruiter of recruiters) {
       const manual = Object.fromEntries(TA_METRICS.map(metric => [metric, Object.fromEntries(TA_DAYS.map(day => [day, {}]))]));
@@ -870,7 +951,7 @@ async function saveWeekly() {
       const index = weeklyReports.findIndex(row => row.recruiter.toLowerCase() === recruiter.toLowerCase());
       if (index < 0) weeklyReports.push(saved); else weeklyReports[index] = saved;
     }
-    $('#weeklyMessage').textContent = 'Weekly achievements saved.'; $('#weeklyMessage').hidden = false; renderWeekly();
+    $('#weeklyMessage').textContent = onlyRecruiter ? `Weekly achievements saved for ${onlyRecruiter}.` : 'All weekly achievements saved.'; $('#weeklyMessage').hidden = false; renderWeekly();
   } catch (error) { $('#weeklyMessage').textContent = error.message; $('#weeklyMessage').hidden = false; }
 }
 function addCandidate() { openDialog(); }
@@ -912,6 +993,12 @@ function pastedShareDate(value) {
   if (match) return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
   match = input.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
   if (match) { let [, day, month, year] = match; if (Number(day) <= 12 && Number(month) > 12) [day, month] = [month, day]; if (Number(year) < 100) year = String(Number(year) < 50 ? 2000 + Number(year) : 1900 + Number(year)); return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`; }
+  match = input.match(/^(\d{1,2})(?:st|nd|rd|th)?[\s/.-]+([a-z]{3,9})[,.\s/-]+(\d{4})$/i);
+  if (match) {
+    const months = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+    const month = months[match[2].slice(0, 3).toLowerCase()], day = Number(match[1]), year = Number(match[3]);
+    if (month) { const date = new Date(Date.UTC(year, month - 1, day)); if (year >= 1 && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day) return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`; }
+  }
   const parsed = Date.parse(input);
   return Number.isNaN(parsed) ? '' : localDateKey(new Date(parsed));
 }
@@ -1016,7 +1103,9 @@ function worksheetType(name) {
   return 'Historical worksheet';
 }
 function worksheetHeader(grid, kind) {
-  const aliases = kind === 'Shortlisted / offered'
+  const aliases = kind === 'Interview tracker'
+    ? [['candidate', 'candidate name', 'name'], ['recruiter', 'recruiter name', 'ta name']]
+    : kind === 'Shortlisted / offered'
     ? [['ta name', 'recruiter'], ['candidate']]
     : kind === 'Candidate sourcing' ? [['candidate name', 'candidate'], ['skill', 'profile']] : [];
   let best = -1, score = 0;
@@ -1025,6 +1114,41 @@ function worksheetHeader(grid, kind) {
     if (found > score) { best = index; score = found; }
   });
   return best;
+}
+function previewInterviewRows(grid) {
+  const aliases = {
+    candidate: ['candidate', 'candidate name', 'name'], recruiter: ['recruiter', 'recruiter name', 'ta name'],
+    date: ['interview date', 'date'], company: ['company', 'client'], profile: ['profile', 'role', 'position'],
+    mode: ['mode', 'interview mode', 'interview type', 'type'], time: ['time', 'interview time'],
+    candidateStatus: ['candidate status', 'candidate interview status', 'interview status', 'status'],
+    clientStatus: ['client status', 'company status', 'client feedback'],
+    contact: ['contact details', 'contact'], email: ['email', 'email id'], phone: ['phone', 'mobile', 'phone number'],
+    remarks: ['remarks', 'remark', 'feedback', 'comments']
+  };
+  const headerIndex = grid.findIndex(row => {
+    const values = row.map(normalizeHeader);
+    return aliases.candidate.some(alias => values.includes(alias)) && aliases.recruiter.some(alias => values.includes(alias));
+  });
+  const find = (headers, field) => headers.findIndex(value => aliases[field].includes(value));
+  const headers = headerIndex >= 0 ? grid[headerIndex].map(normalizeHeader) : [];
+  const columns = headerIndex >= 0 ? {
+    candidate: find(headers, 'candidate'), recruiter: find(headers, 'recruiter'), date: find(headers, 'date'),
+    company: find(headers, 'company'), profile: find(headers, 'profile'), mode: find(headers, 'mode'), time: find(headers, 'time'),
+    candidateStatus: find(headers, 'candidateStatus'), clientStatus: find(headers, 'clientStatus'),
+    contact: find(headers, 'contact'), email: find(headers, 'email'), phone: find(headers, 'phone')
+  } : { candidate: 0, recruiter: 1, date: 2, company: 3, profile: 4, mode: 5, time: 6, candidateStatus: 7, clientStatus: 8, contact: 9, email: -1, phone: -1 };
+  const remarksColumns = headerIndex < 0 ? [10] : headers.map((value, index) => aliases.remarks.includes(value) ? index : -1).filter(index => index >= 0);
+  const rows = [];
+  (headerIndex >= 0 ? grid.slice(headerIndex + 1) : grid).forEach((source, index) => {
+    const get = field => columns[field] < 0 ? '' : String(source[columns[field]] ?? '').trim();
+    const candidate = get('candidate');
+    if (!candidate || normalizeHeader(candidate).includes('candidate')) return;
+    const date = get('date');
+    const contactDetails = get('contact') || [get('email'), get('phone')].filter(Boolean).join(' · ');
+    const remarks = [...new Set(remarksColumns.map(column => String(source[column] ?? '').trim()).filter(Boolean))].join('\n');
+    rows.push({ excelRow: headerIndex >= 0 ? headerIndex + index + 2 : index + 1, candidate, recruiter: get('recruiter'), date: date ? pastedShareDate(date) || date : '', company: get('company'), profile: get('profile'), mode: get('mode'), time: formatInterviewTime(get('time')), candidateStatus: get('candidateStatus'), clientStatus: get('clientStatus'), contactDetails, remarks });
+  });
+  return { rows, headerIndex };
 }
 function sheetGrid(sheet) {
   const originalRef = sheet['!ref']; let minRow = Infinity, minCol = Infinity, maxRow = -1, maxCol = -1;
@@ -1089,6 +1213,15 @@ function renderImportSheetPreview() {
   if (!sheet) return;
   const nonempty = sheet.grid.map((row, index) => ({ row, index })).filter(item => item.row.some(value => String(value ?? '').trim()));
   const headerIndex = sheet.headerIndex;
+  if (sheet.kind === 'Interview tracker') {
+    const parsed = previewInterviewRows(sheet.grid);
+    const fields = ['candidate', 'recruiter', 'date', 'company', 'profile', 'mode', 'time', 'candidateStatus', 'clientStatus', 'contactDetails', 'remarks'];
+    const labels = ['Candidate', 'Recruiter', 'Interview Date', 'Company', 'Profile', 'Mode', 'Time', 'Candidate Status', 'Client Status', 'Contact Details', 'Remarks'];
+    $('#importSheetDetails').textContent = `Interview tracker: mapped to the 11 tracker columns in order; ${parsed.rows.length} candidate interview rows ready.`;
+    $('#importPreviewHead').innerHTML = `<tr><th>Excel row</th>${labels.map(label => `<th>${escapeHTML(label)}</th>`).join('')}</tr>`;
+    $('#importPreviewRows').innerHTML = parsed.rows.slice(0, 18).map(row => `<tr><td>${row.excelRow}</td>${fields.map(field => `<td>${escapeHTML(row[field])}</td>`).join('')}</tr>`).join('');
+    return;
+  }
   if (sheet.kind === 'CV sharing') {
     const parsed = previewCvSharedRows(sheet.grid);
     if (parsed.error) {
@@ -1106,7 +1239,7 @@ function renderImportSheetPreview() {
   }
   let mapping = 'Detected layout: ' + sheet.kind;
   if (sheet.kind === 'CV sharing') mapping += ' · date bands plus recruiter, share status/time, company, profile, candidate, designation, locations, experience, current company, CTC, notice period, remarks, phone and email';
-  else if (sheet.kind === 'Interview tracker') mapping += ' · A recruiter, B company, C profile, D candidate, E interview type, F time, G/H remarks or feedback, I/J contact details';
+  else if (sheet.kind === 'Interview tracker') mapping += ' · Candidate, recruiter, interview date, company, profile, mode, time, candidate status, client status, contact details and remarks mapped by heading';
   else if (sheet.kind === 'Shortlisted / offered') mapping += ` ? header row ${headerIndex + 1}; TA name, month, company, profile, candidate, status, final call, joining date and remarks mapped by heading`;
   else if (sheet.kind === 'Candidate sourcing') mapping += ` ? header row ${headerIndex + 1}; date, skill, candidate name, mobile, email and status/feedback mapped by heading`;
   else if (sheet.kind === 'Weekly summary') mapping += ' ? original cells, merged ranges, row order and blank rows retained';
@@ -1222,7 +1355,7 @@ $('#dateSort').value = savedTalentViewState.sort === 'oldest' ? 'oldest' : 'newe
 activateTrackerTab(savedTalentViewState.tab || 'interviews', false);
 document.querySelectorAll('[data-add-candidate]').forEach(button => button.addEventListener('click', addCandidate));
 document.querySelectorAll('[data-export]').forEach(button => button.addEventListener('click', exportExcel));
-document.querySelectorAll('[data-search]').forEach(input => input.addEventListener('input', () => { cvSharePage = 0; importedSharePage = 0; renderTrackers(); }));
+document.querySelectorAll('[data-search]').forEach(input => input.addEventListener('input', debounce(() => { cvSharePage = 0; importedSharePage = 0; renderTrackers(); })));
 document.querySelectorAll('#interviewRows, #offerRows, #joinedRows').forEach(body => body.addEventListener('change', async event => {
   const select = event.target.closest('select[data-candidate-stage]'); if (!select) return;
   const candidate = candidates.find(c => c.id === select.dataset.candidateStage); if (!candidate) return;
@@ -1239,7 +1372,10 @@ $('#weekStart').value = localDateKey(mondayFor(new Date()));
 $('#weekStart').addEventListener('change', () => { const date = new Date(`${$('#weekStart').value}T00:00:00`); if (!Number.isNaN(date.getTime())) { $('#weekStart').value = localDateKey(mondayFor(date)); loadWeekly(); } });
 $('#recruiterMonth').value = localDateKey(new Date()).slice(0, 7);
 $('#recruiterMonth').addEventListener('change', () => renderRecruiterAnalytics());
-$('#addRecruiter').addEventListener('click', async () => { const name = prompt('Recruiter / TA name'); if (!name?.trim()) return; try { const savedName = await saveRecruiterName(name); const key = savedName.toLocaleLowerCase(); if (!weeklyReports.some(r => r.recruiter.toLocaleLowerCase() === key)) weeklyReports.push({ id: `draft-${Date.now()}`, weekStart: $('#weekStart').value, recruiter: savedName, manual: {} }); renderWeekly(); renderRecruiterAnalytics(); } catch (error) { $('#weeklyMessage').textContent = error.message; $('#weeklyMessage').hidden = false; } });
+$('#addRecruiter').addEventListener('click', () => { $('#newRecruiterName').focus(); $('#newRecruiterName').scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+$('#createRecruiter').addEventListener('click', () => addRecruiterFromInput('#newRecruiterName'));
+$('#analyticsCreateRecruiter').addEventListener('click', () => addRecruiterFromInput('#analyticsNewRecruiterName'));
+$('#analyticsAddRecruiter').addEventListener('click', () => { $('#analyticsNewRecruiterName').focus(); $('#analyticsNewRecruiterName').scrollIntoView({ behavior: 'smooth', block: 'center' }); });
 $('#saveWeekly').addEventListener('click', saveWeekly);
 $('#recruiterWeekStart').addEventListener('change', () => {
   const value = $('#recruiterWeekStart').value;
@@ -1249,7 +1385,7 @@ $('#recruiterWeekStart').addEventListener('change', () => {
   $('#recruiterWeekStart').value = localDateKey(monday);
   renderRecruiterAnalytics();
 });
-$('#refreshRecruiterAnalytics').addEventListener('click', async () => { await Promise.all([loadCandidates(), loadCvShares(), loadWeekly()]); renderRecruiterAnalytics(); });
+$('#refreshRecruiterAnalytics').addEventListener('click', async () => { await Promise.all([loadCandidates(), loadCvShares(), loadWeekly(), loadRecruiters()]); renderRecruiterOptions(); renderRecruiterAnalytics(); });
 $('#weeklyRows').addEventListener('input', event => {
   const target = event.target.closest('input[data-field="achievement"][data-metric="Candidate Shared"]');
   if (!target) return;
@@ -1260,9 +1396,21 @@ $('#weeklyRows').addEventListener('input', event => {
   note.classList.toggle('met', value >= 4);
 });
 document.querySelectorAll('[data-close-import]').forEach(button => button.addEventListener('click', () => $('#trackerImportDialog').close()));
-$('#weeklyRows').addEventListener('click', async event => { const button = event.target.closest('[data-remove-recruiter]'); if (!button) return; const name = button.dataset.removeRecruiter; if (candidates.some(c => c.recruiter?.toLowerCase() === name.toLowerCase())) return alert('This recruiter is assigned to candidate records. Change those candidate profiles first.'); const record = weeklyReports.find(r => r.recruiter.toLowerCase() === name.toLowerCase()); try { if (record && !String(record.id).startsWith('draft-')) await api(`/ta-weekly/${encodeURIComponent(record.id)}`, 'DELETE'); weeklyReports = weeklyReports.filter(r => r.recruiter.toLowerCase() !== name.toLowerCase()); renderWeekly(); } catch (error) { $('#weeklyMessage').textContent = error.message; $('#weeklyMessage').hidden = false; } });
+$('#weeklyRows').addEventListener('click', async event => { const saveButton = event.target.closest('[data-save-weekly-recruiter]'); if (saveButton) { await saveWeekly(saveButton.dataset.saveWeeklyRecruiter); return; } });
+const manageRecruiterDirectoryClick = async event => {
+  const rename = event.target.closest('[data-rename-recruiter]'), remove = event.target.closest('[data-delete-recruiter]');
+  try {
+    if (rename) { const nextName = prompt('New recruiter name', rename.dataset.recruiterName); if (!nextName?.trim() || !rename.dataset.renameRecruiter) return; await api(`/ta-recruiters/${encodeURIComponent(rename.dataset.renameRecruiter)}`, 'PATCH', { name: nextName }); }
+    else if (remove) { if (!remove.dataset.deleteRecruiter) return alert('This recruiter is from existing records and cannot be deleted from the directory yet.'); if (!confirm(`Delete ${remove.dataset.recruiterName} and its weekly entries? Assigned candidate, interview, and CV share records must be reassigned first.`)) return; await api(`/ta-recruiters/${encodeURIComponent(remove.dataset.deleteRecruiter)}`, 'DELETE'); }
+    else return;
+    await Promise.all([loadRecruiters(), loadCandidates(), loadCvShares(), loadWeekly()]);
+  } catch (error) { $('#weeklyMessage').textContent = error.message; $('#weeklyMessage').hidden = false; }
+};
+$('#recruiterDirectory').addEventListener('click', manageRecruiterDirectoryClick);
+$('#analyticsRecruiterDirectory').addEventListener('click', manageRecruiterDirectoryClick);
 populateStageOptions();
-loadCandidates();
-loadWeekly();
-loadCvShares();
-loadRecruiters();
+Promise.all([loadCandidates(), loadWeekly(), loadCvShares(), loadRecruiters()]).then(() => {
+  renderRecruiterOptions();
+  renderWeekly();
+  renderRecruiterAnalytics();
+});

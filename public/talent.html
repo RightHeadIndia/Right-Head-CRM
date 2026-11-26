@@ -58,7 +58,7 @@
   <section class="tracker-view" id="interviewsView">
     <section class="candidate-panel">
       <div class="panel-heading"><div><h2>Interview Tracker</h2><p>Update candidate status and interview feedback in one place.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="interviews" placeholder="Search candidates" aria-label="Search interview tracker"></label><button class="primary-button" type="button" data-add-candidate>+ Add candidate</button><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
-      <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-select-all aria-label="Select all visible interview candidates"></th><th>Candidate</th><th>Recruiter</th><th>Interview date</th><th>Company</th><th>Profile</th><th>Mode</th><th>Time</th><th>Candidate status</th><th>Client status</th><th>Contact details</th><th>Remarks</th><th></th></tr></thead><tbody id="interviewRows"></tbody></table><div id="interviewEmpty" class="empty-state compact" hidden><strong>No interview records yet</strong><p>Add a candidate or import an existing tracker.</p></div></div>
+      <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-select-all aria-label="Select all visible interview candidates"></th><th>Candidate</th><th>Recruiter</th><th>Interview Date</th><th>Company</th><th>Profile</th><th>Mode</th><th>Time</th><th>Candidate Status</th><th>Client Status</th><th>Contact Details</th><th>Remarks</th><th></th></tr></thead><tbody id="interviewRows"></tbody></table><div id="interviewEmpty" class="empty-state compact" hidden><strong>No interview records yet</strong><p>Add a candidate or import an existing tracker.</p></div></div>
     </section>
   </section>
   <section class="tracker-view" id="offersView" hidden>
@@ -75,8 +75,9 @@
   </section>
   <section class="tracker-view" id="weeklyView" hidden>
     <section class="candidate-panel">
-      <div class="panel-heading"><div><h2>Weekly Tracker</h2><p>Add a recruiter once; their name will be available in candidate and CV-share forms and in recruiter reports. Daily counts come from saved records.</p></div><div class="filters"><label class="week-picker">Week starting Monday<input id="weekStart" type="date"></label><button id="addRecruiter" class="secondary-button" type="button">+ Add recruiter</button><button id="saveWeekly" class="primary-button" type="button">Save weekly entries</button><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
+      <div class="panel-heading"><div><h2>Weekly Tracker</h2><p>Manage recruiters, review daily activity, set targets and achievements, then save one recruiter or everyone.</p></div><div class="filters"><label class="week-picker">Week starting Monday<input id="weekStart" type="date"></label><button id="addRecruiter" class="secondary-button" type="button">+ Add recruiter</button><button id="saveWeekly" class="primary-button" type="button">Save all weekly entries</button><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
       <div id="weeklyMessage" class="weekly-message" role="status" hidden></div>
+      <div class="recruiter-management"><h3>Recruiter directory</h3><div class="recruiter-add-row"><label>New recruiter name<input id="newRecruiterName" type="text" maxlength="200" placeholder="Enter recruiter name"></label><button id="createRecruiter" class="secondary-button" type="button">Add recruiter</button></div><div id="recruiterDirectory" class="recruiter-directory-list"></div></div>
       <div id="weeklyRows" class="weekly-trackers"></div>
     </section>
   </section>
@@ -91,6 +92,7 @@
   <section class="tracker-view" id="recruitersView" hidden>
     <section class="candidate-panel recruiter-analytics-panel">
       <div class="panel-heading"><div><h2>Recruiter-wise performance</h2><p>The recruiter filter above applies across candidate, CV share, weekly, and analytics sections. Choose one name to review that recruiter’s counts and full activity records.</p></div><button class="secondary-button" type="button" id="refreshRecruiterAnalytics">Refresh data</button></div>
+      <div class="recruiter-management"><h3>Manage recruiters</h3><div class="recruiter-add-row"><label>Recruiter name<input id="analyticsNewRecruiterName" type="text" maxlength="200" placeholder="Enter recruiter name"></label><button id="analyticsCreateRecruiter" class="secondary-button" type="button">Add recruiter</button></div><div id="analyticsRecruiterDirectory" class="recruiter-directory-list"></div></div>
       <div id="recruiterAnalyticsMetrics" class="recruiter-analytics-metrics"></div>
       <div id="recruiterAnalytics" class="recruiter-analytics-list"></div>
       <div class="recruiter-weekly-heading"><div><h3>Weekly recruiter activity</h3><p>Interviews use the interview date. Shortlists, offers, joins, and rejections use their dated status records, never the last-updated or interview date. Share target: 4 per weekday; 1st/3rd Saturdays are half days (2), 2nd/4th are off. A 5th Saturday is treated as a half day.</p></div><label>Week starting Monday<input id="recruiterWeekStart" type="date"></label></div>
@@ -148,6 +150,11 @@
       <label>Recruiter / TA Name<input name="recruiter" maxlength="200" list="recruiterNames" autocomplete="off"></label>
       <label>Month<input name="month" type="month"></label>
       <label>Interview date<input name="interviewDate" type="date"></label>
+      <label>Interview mode<input name="interviewMode" maxlength="100" placeholder="e.g. Video, Phone, In person"></label>
+      <label>Interview time<input name="interviewTime" type="time"></label>
+      <label>Candidate status<input name="interviewStatus" maxlength="100" placeholder="e.g. Selected, Hold"></label>
+      <label>Client status<input name="clientStatus" maxlength="200" placeholder="e.g. Feedback pending"></label>
+      <label class="full">Contact details<input name="contactDetails" maxlength="500" placeholder="Email, phone, or other contact details"></label>
       <label>Shared date<input name="sharedDate" type="date"></label>
       <label>Shortlisted date<input name="shortlistedDate" type="date"></label>
       <label>Offer date<input name="offeredDate" type="date"></label>

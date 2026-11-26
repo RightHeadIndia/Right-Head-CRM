@@ -106,6 +106,34 @@ test('candidate pipeline supports validation, updates, and deletion', async () =
   cookie = crmLogin.headers.get('set-cookie').split(';')[0];
 });
 
+test('Interview Tracker export uses the ordered eleven fields for existing and newly imported records', async () => {
+  const talentLogin = await call('POST', '/api/auth/login', {
+    product: 'talent', email: 'avvni.sharrma@righthead.in', password: TALENT_PASSWORD
+  });
+  assert.equal(talentLogin.status, 200);
+  cookie = talentLogin.headers.get('set-cookie').split(';')[0];
+  const existing = await call('POST', '/api/candidates', {
+    name: 'Existing Interview Record', role: 'Consultant', stage: 'Interview', company: 'Acme', recruiter: 'Alex Kim',
+    interviewDate: '2024-10-03', interviewMode: 'Phone', interviewTime: '0.375', interviewStatus: 'Shortlisted',
+    clientStatus: 'Feedback pending', contactDetails: 'existing@example.test · 9876543210', remarks: 'Existing remarks'
+  });
+  assert.equal(existing.status, 200);
+  const imported = await call('POST', '/api/candidates/import', { rows: [{
+    name: 'New Interview Record', role: 'Designer', stage: 'Interview', recruiter: 'Maya Shah', company: 'Globex',
+    interview: { date: '2024-10-04', company: 'Globex', role: 'Designer', recruiter: 'Maya Shah', mode: 'Video', time: '0.5', candidateStatus: 'Interviewed', clientStatus: 'Selected', contactDetails: 'new@example.test · 9876501234', remarks: 'New remarks' }
+  }] });
+  assert.equal(imported.status, 200);
+
+  const response = await fetch(`${base}/api/ta-export.xlsx?week=2026-11-23`, { headers: { cookie } });
+  assert.equal(response.status, 200);
+  const XLSX = require('xlsx');
+  const workbook = XLSX.read(Buffer.from(await response.arrayBuffer()), { type: 'buffer' });
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets['Interview Tracker'], { header: 1, defval: '' });
+  assert.deepEqual(rows[0], ['Candidate', 'Recruiter', 'Interview Date', 'Company', 'Profile', 'Mode', 'Time', 'Candidate Status', 'Client Status', 'Contact Details', 'Remarks']);
+  assert.deepEqual(rows[1], ['Existing Interview Record', 'Alex Kim', '03/Oct/2024', 'Acme', 'Consultant', 'Phone', '09:00', 'Shortlisted', 'Feedback pending', 'existing@example.test · 9876543210', 'Existing remarks']);
+  assert.deepEqual(rows[2], ['New Interview Record', 'Maya Shah', '04/Oct/2024', 'Globex', 'Designer', 'Video', '12:00', 'Interviewed', 'Selected', 'new@example.test · 9876501234', 'New remarks']);
+});
+
 test('RecruitIQ jobs, central candidate records, processing states, and exports use Talent access', async () => {
   const noAccess = await call('GET', '/api/recruit-iq', undefined, { nocookie: true });
   assert.equal(noAccess.status, 401);

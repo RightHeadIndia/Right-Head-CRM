@@ -320,6 +320,7 @@ function renderList() {
     <label class="bulk-clear"><input id="bulkClearNotes" type="checkbox"> Clear notes</label>
     <div class="bulk-actions">
       <button class="btn primary" id="bulkApplyButton" onclick="applyBulkClientStatus()">Apply to selected</button>
+      <button class="btn danger" id="bulkDeleteClientsButton" onclick="deleteSelectedClients()">Delete selected</button>
       <button class="btn" onclick="clearClientSelection()">Clear selection</button>
     </div>
   </div>
@@ -372,6 +373,23 @@ function clearClientSelection() {
   selectedClientIds.clear();
   document.querySelectorAll('.client-row-select').forEach(input => { input.checked = false; });
   updateClientSelectionUI();
+}
+async function deleteSelectedClients() {
+  const ids = [...selectedClientIds];
+  if (!ids.length || !confirm(`Delete ${ids.length} selected client${ids.length === 1 ? '' : 's'} and their linked tasks? This cannot be undone.`)) return;
+  const button = $('#bulkDeleteClientsButton');
+  button.disabled = true;
+  try {
+    const result = await api('/clients/bulk-delete', 'POST', { ids });
+    selectedClientIds.clear();
+    toast(`Deleted ${result.deleted} client${result.deleted === 1 ? '' : 's'}`);
+    await refresh();
+    render();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 async function applyBulkClientStatus() {
   const ids = [...selectedClientIds];

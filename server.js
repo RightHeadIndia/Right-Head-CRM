@@ -9,7 +9,7 @@ const { backup: sqliteBackup } = require('node:sqlite');
 const { openDatabase: openSQLiteDatabase, readDatabase: readSQLiteDatabase, writeDatabase: writeSQLiteDatabase, readRecord: readSQLiteRecord, updateRecords: updateSQLiteRecords } = require('./lib/database');
 const { openDatabase: openPostgresDatabase, readDatabase: readPostgresDatabase, writeDatabase: writePostgresDatabase, readRecord: readPostgresRecord, updateRecords: updatePostgresRecords, flush, closeDatabase, tryAdvisoryLock } = require('./lib/database-postgres');
 const { waitForPostgresWrites } = require('./lib/postgres-response-barrier');
-const { importWorkbook: importHistoricalWorkbook, rebuildWorkbook: rebuildHistoricalWorkbook } = require('./lib/talent-history-import');
+const { importWorkbook: importHistoricalWorkbook, rebuildWorkbook: rebuildHistoricalWorkbook, dateOnly } = require('./lib/talent-history-import');
 
 const PORT = process.env.PORT || 3000;
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
@@ -712,23 +712,30 @@ function validWeekStart(value) { return /^\d{4}-\d{2}-\d{2}$/.test(String(value 
 app.get('/api/ta-recruiters', asyncRoute(async (_req, res) => {
   const db = load();
   db.taRecruiters ||= [];
+  const candidateNames = new Set([
+    ...db.candidates.map(candidate => candidate.name),
+    ...(db.taCvShares || []).map(share => share.candidateName)
+  ].map(value => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase()).filter(Boolean));
+  const nonNames = new Set(['confirmed', 'awaiting confirmation', 'to be aligned', 'selected', 'rejected', 'shortlisted', 'interview', 'screening', 'offer', 'joining', 'joined', 'on hold', 'not selected']);
+  const isRecruiterName = value => {
+    const name = String(value || '').trim().replace(/\s+/g, ' ');
+    return name.length >= 2 && /[a-z]/i.test(name) && !/[\d@]/.test(name) && !/\b(?:gmail|yahoo|outlook|hotmail)\b/i.test(name) && !/^\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(name) && !nonNames.has(name.toLocaleLowerCase()) && !candidateNames.has(name.toLocaleLowerCase());
+  };
   const names = [
     ...db.taRecruiters.map(row => row.name),
     ...db.candidates.flatMap(candidate => [candidate.recruiter, ...(candidate.interviews || []).map(interview => interview.recruiter)]),
     ...(db.taCvShares || []).map(share => share.recruiter),
-    db.weeklyReports.map(report => report.recruiter)
-  ].map(value => String(value || '').trim()).filter(Boolean);
+    ...db.weeklyReports.map(report => report.recruiter)
+  ].map(value => String(value || '').trim().replace(/\s+/g, ' ')).filter(isRecruiterName);
   const existing = new Map(db.taRecruiters.map(row => [String(row.name || '').trim().toLocaleLowerCase(), row]));
   let changed = false;
   for (const name of names) {
     const key = name.toLocaleLowerCase();
-    if (!existing.has(key)) {
-      const record = { id: uid(), name, createdAt: now() };
-      db.taRecruiters.push(record); existing.set(key, record); changed = true;
-    }
+    if (!existing.has(key)) { const record = { id: uid(), name, createdAt: now() }; db.taRecruiters.push(record); existing.set(key, record); changed = true; }
   }
+  const filtered = db.taRecruiters.filter(row => isRecruiterName(row.name));
   if (changed) { save(db); await flush(database); }
-  res.json(db.taRecruiters.slice().sort((a, b) => a.name.localeCompare(b.name)));
+  res.json(filtered.slice().sort((a, b) => a.name.localeCompare(b.name)));
 }));
 app.post('/api/ta-recruiters', asyncRoute(async (req, res) => {
   const name = String(req.body?.name || '').trim().replace(/\s+/g, ' ').slice(0, 200);
@@ -740,6 +747,34 @@ app.post('/api/ta-recruiters', asyncRoute(async (req, res) => {
     db.taRecruiters.push(record); save(db); await flush(database);
   }
   res.status(200).json(record);
+}));
+app.patch('/api/ta-recruiters/:id', asyncRoute(async (req, res) => {
+  const name = String(req.body?.name || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+  if (!name) return res.status(400).json({ error: 'Enter the recruiter name.' });
+  const db = load(); db.taRecruiters ||= [];
+  const record = db.taRecruiters.find(row => row.id === req.params.id);
+  if (!record) return res.status(404).json({ error: 'Recruiter not found.' });
+  if (db.taRecruiters.some(row => row.id !== record.id && row.name.toLocaleLowerCase() === name.toLocaleLowerCase())) return res.status(409).json({ error: 'A recruiter with that name already exists.' });
+  const oldName = record.name, key = oldName.toLocaleLowerCase();
+  db.candidates.forEach(candidate => {
+    if (String(candidate.recruiter || '').toLocaleLowerCase() === key) candidate.recruiter = name;
+    (candidate.interviews || []).forEach(interview => { if (String(interview.recruiter || '').toLocaleLowerCase() === key) interview.recruiter = name; });
+    (candidate.statusHistory || []).forEach(event => { if (String(event.recruiter || '').toLocaleLowerCase() === key) event.recruiter = name; });
+  });
+  (db.taCvShares || []).forEach(share => { if (String(share.recruiter || '').toLocaleLowerCase() === key) share.recruiter = name; });
+  db.weeklyReports.forEach(report => { if (String(report.recruiter || '').toLocaleLowerCase() === key) report.recruiter = name; });
+  record.name = name; record.updatedAt = now(); save(db); await flush(database); res.json(record);
+}));
+app.delete('/api/ta-recruiters/:id', asyncRoute(async (req, res) => {
+  const db = load(); db.taRecruiters ||= [];
+  const record = db.taRecruiters.find(row => row.id === req.params.id);
+  if (!record) return res.status(404).json({ error: 'Recruiter not found.' });
+  const key = String(record.name || '').toLocaleLowerCase();
+  const assigned = db.candidates.some(candidate => String(candidate.recruiter || '').toLocaleLowerCase() === key || (candidate.interviews || []).some(interview => String(interview.recruiter || '').toLocaleLowerCase() === key) || (candidate.statusHistory || []).some(event => String(event.recruiter || '').toLocaleLowerCase() === key)) || (db.taCvShares || []).some(share => String(share.recruiter || '').toLocaleLowerCase() === key);
+  if (assigned) return res.status(409).json({ error: 'This recruiter is assigned to candidate, interview, or CV share records. Reassign those records before deleting the recruiter.' });
+  db.taRecruiters = db.taRecruiters.filter(row => row.id !== record.id);
+  db.weeklyReports = db.weeklyReports.filter(report => String(report.recruiter || '').toLocaleLowerCase() !== key);
+  save(db); await flush(database); res.json({ ok: true });
 }));
 app.get('/api/ta-weekly', (req, res) => {
   const weekStart = String(req.query.week || '');
@@ -913,7 +948,42 @@ app.get('/api/ta-export.xlsx', asyncRoute(async (req, res) => {
   const XLSX = require('xlsx');
   const db = load(), workbook = XLSX.utils.book_new();
   const candidates = db.candidates;
-  const interviewRows = candidates.flatMap(c => (c.interviews?.length ? c.interviews : [{ date: c.interviewDate, company: c.company, role: c.role, recruiter: c.recruiter, mode: c.interviewMode, time: c.interviewTime, candidateStatus: c.interviewStatus || c.stage, clientStatus: c.clientStatus, email: c.email, phone: c.phone, contactDetails: c.contactDetails, remarks: c.remarks || c.feedback }]).map(i => ({ Candidate: c.name, Recruiter: i.recruiter || c.recruiter || '', 'Interview Date': i.date || '', Company: i.company || c.company || '', Profile: i.role || c.role || '', 'Interview Mode': i.mode || '', 'Interview Time': i.time || '', 'Candidate Status': i.candidateStatus || c.stage || '', 'Client Status': i.clientStatus || '', Email: i.email || c.email || '', Phone: i.phone || c.phone || '', 'Contact Details': i.contactDetails || '', Remarks: i.remarks || '' })));
+  const formatInterviewDate = value => {
+    const match = dateOnly(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return String(value || '');
+    const [, year, month, day] = match;
+    const monthName = new Intl.DateTimeFormat('en', { month: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))));
+    return `${day}/${monthName}/${year}`;
+  };
+  const interviewContact = (interview, candidate) => {
+    const details = String(interview.contactDetails || '').trim();
+    const supplemental = [interview.email || candidate.email, interview.phone || candidate.phone]
+      .map(value => String(value || '').trim()).filter(value => value && !details.toLowerCase().includes(value.toLowerCase()));
+    return [details, ...new Set(supplemental)].filter(Boolean).join(' · ');
+  };
+  const interviewTime = value => {
+    const raw = String(value ?? '').trim();
+    if (/^\d+(?:\.\d+)?$/.test(raw)) {
+      const serial = Number(raw), fraction = serial >= 1 ? serial % 1 : serial;
+      if (fraction >= 0 && fraction < 1 && serial < 100000) {
+        const minutes = Math.round(fraction * 1440) % 1440;
+        return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+      }
+    }
+    const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(am|pm)?$/i);
+    if (!match) return raw;
+    let hour = Number(match[1]);
+    if (match[3]) { if (hour === 12) hour = 0; if (match[3].toLowerCase() === 'pm') hour += 12; }
+    return hour <= 23 && Number(match[2]) <= 59 ? `${String(hour).padStart(2, '0')}:${match[2]}` : raw;
+  };
+  const interviewRows = candidates.flatMap(c => (c.interviews?.length ? c.interviews : [{ date: c.interviewDate, company: c.company, role: c.role, recruiter: c.recruiter, mode: c.interviewMode, time: c.interviewTime, candidateStatus: c.interviewStatus || c.stage, clientStatus: c.clientStatus, email: c.email, phone: c.phone, contactDetails: c.contactDetails, remarks: c.remarks || c.feedback }]).map(i => ({
+    Candidate: c.name || '', Recruiter: i.recruiter || c.recruiter || '', 'Interview Date': formatInterviewDate(i.date || c.interviewDate),
+    Company: i.company || c.company || '', Profile: i.role || c.role || '', Mode: i.mode || c.interviewMode || '',
+    Time: interviewTime(i.time || c.interviewTime), 'Candidate Status': i.candidateStatus || c.interviewStatus || c.stage || '',
+    'Client Status': i.clientStatus || c.clientStatus || '',
+    'Contact Details': interviewContact(i, c),
+    Remarks: i.remarks || c.remarks || c.feedback || ''
+  })));
   const offerRows = candidates.filter(c => ['Shortlisted', 'Offer', 'Joining'].includes(c.stage)).map(c => ({ 'TA Name': c.recruiter || '', Month: c.month || (c.doj ? c.doj.slice(0, 7) : weekStart.slice(0, 7)), Company: c.company || '', Profile: c.role || '', Candidate: c.name, Status: c.stage, 'Final Call': c.finalCall || '', 'Joining Date': c.doj || '', Remarks: c.remarks || '' }));
   const joinedRows = candidates.filter(c => ['Joined', 'Joining'].includes(c.stage)).map(c => ({ 'TA Name': c.recruiter || '', Month: c.month || (c.doj ? c.doj.slice(0, 7) : weekStart.slice(0, 7)), Company: c.company || '', Profile: c.role || '', Candidate: c.name, Status: c.stage, 'Joining Date': c.doj || '', Remarks: c.remarks || '' }));
   const cvShareRows = (db.taCvShares || []).map(share => ({ 'Share Date': share.sharedAt || '', Recruiter: share.recruiter || '', 'Share Status / Time': share.shareStatus || '', Company: share.company || '', Profile: share.role || '', Candidate: share.candidateName || '', Designation: share.designation || '', Location: share.location || '', 'Work Location': share.workLocation || '', Experience: share.experience || '', 'Current Company': share.currentCompany || '', 'Current CTC': share.currentCtc || '', 'Expected CTC': share.expectedCtc || '', 'Notice Period': share.noticePeriod || '', Remarks: share.remarks || '', Phone: share.phone || '', Email: share.email || '' }));
@@ -1079,6 +1149,23 @@ app.put('/api/clients/:id', async (req, res, next) => {
 
   res.json(c);
 });
+
+app.post('/api/clients/bulk-delete', asyncRoute(async (req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids) || !ids.length || ids.length > 10000 || ids.some(id => typeof id !== 'string')) {
+    return res.status(400).json({ error: 'Select between 1 and 10,000 clients to delete.' });
+  }
+  const selected = new Set(ids), db = load();
+  const deletedClients = db.clients.filter(client => selected.has(client.id));
+  if (!deletedClients.length) return res.json({ deleted: 0 });
+  deletedClients.forEach(client => log(db, client.id, 'deleted', 'Client record deleted'));
+  db.clients = db.clients.filter(client => !selected.has(client.id));
+  db.tasks = db.tasks.filter(task => !selected.has(task.clientId));
+  db.deals.forEach(deal => { if (selected.has(deal.clientId)) deal.clientId = ''; });
+  save(db);
+  await flush(database);
+  res.json({ deleted: deletedClients.length });
+}));
 
 app.delete('/api/clients/:id', (req, res) => {
   const db = load();

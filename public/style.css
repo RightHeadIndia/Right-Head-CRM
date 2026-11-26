@@ -1153,6 +1153,35 @@ td a:hover {
   display: none;
 }
 
+.bulk-status-toolbar .bulk-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--blue-border);
+}
+
+.table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.table-wrap tbody tr:hover {
+  background: color-mix(in srgb, var(--blue-bg) 46%, transparent);
+}
+
+.table-wrap td select,
+.table-wrap td input:not([type="checkbox"]) {
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
 .bulk-selected-count {
   align-self: center;
   color: var(--blue-text);
