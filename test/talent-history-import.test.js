@@ -56,12 +56,24 @@ test('imports candidate and weekly sheets with exact duplicate safety and distin
   assert.equal(archived.Workbook.Sheets.find(sheet => sheet.name === 'Fint Sol').Hidden, 1);
 });
 
-test('reimporting an already imported workbook does not duplicate archive or candidate rows', () => {
+test('reimporting an already imported workbook checks its rows without duplicating archive or candidate rows', () => {
   const buffer = fixtureWorkbook(), db = { candidates: [], taHistoricalImports: [] }, names = extractWorkbook(buffer).detected.map(sheet => sheet.name);
   importWorkbook(db, buffer, names, 'fixture.xlsx');
   const before = db.candidates.length;
   const again = importWorkbook(db, buffer, names, 'fixture.xlsx');
   assert.equal(db.candidates.length, before);
   assert.equal(db.taHistoricalImports.length, 1);
-  assert.ok(again.worksheets.every(sheet => sheet.status === 'already imported'));
+  assert.ok(again.worksheets.every(sheet => sheet.status === 'imported'));
+  assert.ok(again.duplicatesSkipped >= 2, 'existing interviews are recognized and skipped');
+});
+
+test('reprocesses an archived worksheet whose previous import report recorded zero rows', () => {
+  const buffer = fixtureWorkbook(), db = { candidates: [], taHistoricalImports: [] }, names = extractWorkbook(buffer).detected.map(sheet => sheet.name);
+  importWorkbook(db, buffer, names, 'fixture.xlsx');
+  db.candidates = [];
+  db.taHistoricalImports[0].report.worksheets = db.taHistoricalImports[0].report.worksheets.map(sheet => ({ ...sheet, recordsImported: 0, candidatesCreated: 0, interviewsAdded: 0, cvSharesAdded: 0 }));
+  const retried = importWorkbook(db, buffer, names, 'fixture.xlsx');
+  assert.ok(db.candidates.some(candidate => candidate.name === 'Jordan Lee'));
+  assert.ok(retried.candidatesCreated > 0);
+  assert.ok(retried.worksheets.every(sheet => sheet.status === 'imported'));
 });

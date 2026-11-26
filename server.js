@@ -7,7 +7,7 @@ const crypto = require('node:crypto');
 const nodemailer = require('nodemailer');
 const { backup: sqliteBackup } = require('node:sqlite');
 const { openDatabase: openSQLiteDatabase, readDatabase: readSQLiteDatabase, writeDatabase: writeSQLiteDatabase, readRecord: readSQLiteRecord, updateRecords: updateSQLiteRecords } = require('./lib/database');
-const { openDatabase: openPostgresDatabase, readDatabase: readPostgresDatabase, writeDatabase: writePostgresDatabase, readRecord: readPostgresRecord, updateRecords: updatePostgresRecords, flush, closeDatabase, tryAdvisoryLock } = require('./lib/database-postgres');
+const { openDatabase: openPostgresDatabase, readDatabase: readPostgresDatabase, readFreshDatabase: readFreshPostgresDatabase, writeDatabase: writePostgresDatabase, readRecord: readPostgresRecord, updateRecords: updatePostgresRecords, flush, closeDatabase, tryAdvisoryLock } = require('./lib/database-postgres');
 const { waitForPostgresWrites } = require('./lib/postgres-response-barrier');
 const { importWorkbook: importHistoricalWorkbook, rebuildWorkbook: rebuildHistoricalWorkbook, dateOnly } = require('./lib/talent-history-import');
 
@@ -233,6 +233,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Keep the existing route modules' load/save interface while persisting every
 // collection in SQLite transactions. The database module imports db.json once.
 const load = () => readDatabase(database);
+const loadFresh = collections => usingPostgres ? readFreshPostgresDatabase(database, collections) : Promise.resolve(load());
 const save = db => writeDatabase(database, db);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const now = () => new Date().toISOString();
@@ -550,16 +551,15 @@ app.get('/api/backup', asyncRoute(async (req, res) => {
   }
 }));
 
-app.get('/api/candidates', (req, res) => {
-  const db = load(), candidates = db.candidates;
+app.get('/api/candidates', asyncRoute(async (req, res) => {
+  const db = await loadFresh(['candidates']), candidates = db.candidates;
   let migrated = false;
   for (const candidate of candidates) {
     if (LEGACY_CANDIDATE_STAGES[candidate.stage]) { candidate.stage = LEGACY_CANDIDATE_STAGES[candidate.stage]; migrated = true; }
     for (const event of candidate.statusHistory || []) if (LEGACY_CANDIDATE_STAGES[event.stage]) { event.stage = LEGACY_CANDIDATE_STAGES[event.stage]; migrated = true; }
   }
-  if (migrated) save(db);
   res.json(candidates.slice().sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))));
-});
+}));
 
 app.post('/api/candidates', (req, res) => {
   const db = load();
@@ -776,11 +776,11 @@ app.delete('/api/ta-recruiters/:id', asyncRoute(async (req, res) => {
   db.weeklyReports = db.weeklyReports.filter(report => String(report.recruiter || '').toLocaleLowerCase() !== key);
   save(db); await flush(database); res.json({ ok: true });
 }));
-app.get('/api/ta-weekly', (req, res) => {
+app.get('/api/ta-weekly', asyncRoute(async (req, res) => {
   const weekStart = String(req.query.week || '');
   if (!validWeekStart(weekStart)) return res.status(400).json({ error: 'Choose a Monday as the week start.' });
-  res.json(load().weeklyReports.filter(report => report.weekStart === weekStart));
-});
+  res.json((await loadFresh(['weeklyReports'])).weeklyReports.filter(report => report.weekStart === weekStart));
+}));
 app.put('/api/ta-weekly', asyncRoute(async (req, res) => {
   const { weekStart, recruiter, manual } = req.body || {};
   if (!validWeekStart(weekStart)) return res.status(400).json({ error: 'Choose a Monday as the week start.' });
@@ -816,10 +816,10 @@ app.delete('/api/ta-weekly/:id', asyncRoute(async (req, res) => {
   await flush(database);
   res.json({ ok: true });
 }));
-app.get('/api/ta-cv-shares', (req, res) => {
-  const rows = load().taCvShares.slice().sort((a, b) => String(b.sharedAt || '').localeCompare(String(a.sharedAt || '')) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+app.get('/api/ta-cv-shares', asyncRoute(async (req, res) => {
+  const rows = (await loadFresh(['taCvShares'])).taCvShares.slice().sort((a, b) => String(b.sharedAt || '').localeCompare(String(a.sharedAt || '')) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   res.json(rows);
-});
+}));
 app.post('/api/ta-cv-shares', asyncRoute(async (req, res) => {
   const { clean, error } = cleanCvShareInput(req.body);
   if (error) return res.status(400).json({ error });
@@ -893,10 +893,10 @@ app.delete('/api/ta-cv-shares/:id', asyncRoute(async (req, res) => {
   if (db.taCvShares.length === originalLength) return res.status(404).json({ error: 'CV share was not found.' });
   save(db); await flush(database); res.json({ ok: true });
 }));
-app.get('/api/ta-imports', (req, res) => {
-  const db = load();
+app.get('/api/ta-imports', asyncRoute(async (req, res) => {
+  const db = await loadFresh(['taHistoricalImports']);
   res.json(db.taHistoricalImports.slice().sort((a, b) => String(b.updatedAt || b.importedAt).localeCompare(String(a.updatedAt || a.importedAt))).map(({ id, sourceName, importedAt, updatedAt, report }) => ({ id, sourceName, importedAt, updatedAt, report })));
-});
+}));
 app.delete('/api/ta-imports', asyncRoute(async (req, res) => {
   const ids = req.body?.ids;
   if (!Array.isArray(ids) || !ids.length || ids.length > 1000 || ids.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/i.test(id))) return res.status(400).json({ error: 'Select between 1 and 1,000 workbook archives.' });
@@ -946,7 +946,7 @@ app.get('/api/ta-export.xlsx', asyncRoute(async (req, res) => {
   const weekStart = String(req.query.week || '');
   if (!validWeekStart(weekStart)) return res.status(400).json({ error: 'Choose a Monday as the week start.' });
   const XLSX = require('xlsx');
-  const db = load(), workbook = XLSX.utils.book_new();
+  const db = await loadFresh(['candidates', 'taCvShares', 'weeklyReports']), workbook = XLSX.utils.book_new();
   const candidates = db.candidates;
   const formatInterviewDate = value => {
     const match = dateOnly(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
