@@ -19,7 +19,9 @@ let visibleImportedSharePageIds = [];
 let busy = false;
 let talentRefreshPromise = null;
 let lastTalentRefreshAt = 0;
+let lastTalentUserInteractionAt = 0;
 let weeklyEntriesDirty = false;
+let hasLoadedTalentWorkspace = false;
 const TALENT_VIEW_STATE_KEY = 'right-head-talent-view-state';
 const TRACKER_TABS = ['interviews', 'offers', 'joined', 'weekly', 'cvshares', 'recruiters', 'importhistory', 'pipeline'];
 function readTalentViewState() {
@@ -88,6 +90,10 @@ async function fetchTalentWorkspaceData(showLoading = false) {
     const [nextCandidates, nextCvShares, nextWeekly, nextRecruiters] = await Promise.all([
       api('/candidates'), api('/ta-cv-shares'), api(`/ta-weekly?week=${encodeURIComponent(weekStart)}`), api('/ta-recruiters')
     ]);
+    const currentSnapshot = JSON.stringify([candidates, cvShares, weeklyReports, recruiterDirectory]);
+    const nextSnapshot = JSON.stringify([nextCandidates, nextCvShares, nextWeekly, nextRecruiters]);
+    lastTalentRefreshAt = Date.now();
+    if (hasLoadedTalentWorkspace && currentSnapshot === nextSnapshot) return true;
     candidates = Array.isArray(nextCandidates) ? nextCandidates : [];
     cvShares = Array.isArray(nextCvShares) ? nextCvShares : [];
     weeklyReports = Array.isArray(nextWeekly) ? nextWeekly : [];
@@ -97,8 +103,7 @@ async function fetchTalentWorkspaceData(showLoading = false) {
     render();
     renderWeekly();
     renderRecruiterAnalytics();
-    await loadImportReports();
-    lastTalentRefreshAt = Date.now();
+    hasLoadedTalentWorkspace = true;
     return true;
   } catch (error) {
     $('#recruiterAnalytics').innerHTML = `<div class="empty-state compact"><strong>Recruiter analytics could not load</strong><p>${escapeHTML(error.message)}</p><button type="button" class="secondary-button" id="retryRecruiterAnalytics">Retry loading data</button></div>`;
@@ -315,7 +320,7 @@ async function loadCandidates() {
     const existingIds = new Set(candidates.map(candidate => candidate.id));
     for (const id of selectedCandidateIds) if (!existingIds.has(id)) selectedCandidateIds.delete(id);
     render();
-    renderRecruiterAnalytics();
+    renderWeekly();
   } catch (error) {
     showError(error.message);
   }
@@ -570,8 +575,8 @@ $('#stageFilter').addEventListener('change', render);
 function persistDateFilters() {
   saveTalentViewState({ month: $('#filterMonth').value, date: $('#filterDate').value, year: $('#filterYear').value, recruiter: $('#recruiterFilter').value, sort: $('#dateSort').value });
 }
-['filterMonth', 'filterDate', 'filterYear', 'recruiterFilter', 'dateSort'].forEach(id => $(`#${id}`).addEventListener('change', () => { cvSharePage = 0; persistDateFilters(); render(); }));
-$('#clearDateFilters').addEventListener('click', () => { $('#filterMonth').value = ''; $('#filterDate').value = ''; $('#filterYear').value = ''; $('#recruiterFilter').value = ''; $('#dateSort').value = 'newest'; cvSharePage = 0; persistDateFilters(); render(); });
+['filterMonth', 'filterDate', 'filterYear', 'recruiterFilter', 'dateSort'].forEach(id => $(`#${id}`).addEventListener('change', () => { cvSharePage = 0; persistDateFilters(); render(); renderWeekly(); }));
+$('#clearDateFilters').addEventListener('click', () => { $('#filterMonth').value = ''; $('#filterDate').value = ''; $('#filterYear').value = ''; $('#recruiterFilter').value = ''; $('#dateSort').value = 'newest'; cvSharePage = 0; persistDateFilters(); render(); renderWeekly(); });
 $('#closeDialog').addEventListener('click', () => $('#candidateDialog').close());
 $('#cancelDialog').addEventListener('click', () => $('#candidateDialog').close());
 $('#logout').addEventListener('click', async () => {
@@ -808,7 +813,9 @@ function renderRecruiterAnalytics() {
   });
   const rows = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
   const selectedRecruiter = $('#recruiterFilter')?.value || '';
-  const visibleRows = rows;
+  const visibleRows = selectedRecruiter
+    ? rows.filter(row => row.name.toLocaleLowerCase() === selectedRecruiter.toLocaleLowerCase())
+    : rows;
   const totals = visibleRows.reduce((sum, row) => ({ cvShares: sum.cvShares + row.cvShares, profiles: sum.profiles + row.profiles.size, shortlisted: sum.shortlisted + row.shortlisted.size, interviews: sum.interviews + row.interviews, selected: sum.selected + row.selected.size, rejected: sum.rejected + row.rejected.size }), { cvShares: 0, profiles: 0, shortlisted: 0, interviews: 0, selected: 0, rejected: 0 });
   const metricCards = [['CVs shared', totals.cvShares], ['Profiles shared', totals.profiles], ['Shortlisted', totals.shortlisted], ['Interviews conducted', totals.interviews], ['Selected / offered', totals.selected], ['Rejected', totals.rejected]];
   $('#recruiterAnalyticsMetrics').innerHTML = metricCards.map(([label, value]) => `<article class="recruiter-analytics-metric"><span>${label}</span><strong>${value}</strong></article>`).join('');
@@ -896,7 +903,7 @@ function renderCvShares() {
   $('#cvShareNextPage').disabled = cvSharePage >= pageCount - 1;
 }
 async function loadCvShares() {
-  try { cvShares = await api('/ta-cv-shares'); renderRecruiterOptions(); const ids = new Set(cvShares.map(share => share.id)); for (const id of selectedCvShareIds) if (!ids.has(id)) selectedCvShareIds.delete(id); for (const id of selectedImportedShareIds) if (!ids.has(id)) selectedImportedShareIds.delete(id); populateYearFilters(); render(); renderRecruiterAnalytics(); }
+  try { cvShares = await api('/ta-cv-shares'); renderRecruiterOptions(); const ids = new Set(cvShares.map(share => share.id)); for (const id of selectedCvShareIds) if (!ids.has(id)) selectedCvShareIds.delete(id); for (const id of selectedImportedShareIds) if (!ids.has(id)) selectedImportedShareIds.delete(id); populateYearFilters(); render(); renderWeekly(); }
   catch (error) { $('#workspaceMessage').textContent = error.message; $('#workspaceMessage').hidden = false; }
 }
 function renderImportedShareHistory() {
@@ -1360,7 +1367,7 @@ async function submitHistoricalImport(names, individual = false) {
       return `${sheet.name}: already imported (${previous?.candidatesCreated || 0} candidates and ${previous?.interviewsAdded || 0} interviews were imported earlier)`;
     }).join('\n');
     $('#trackerImportDialog').close();
-    await loadRecruiterAnalyticsData();
+    await loadRecruiterAnalyticsData(); await loadImportReports();
     const alreadyImported = result.worksheets.length > 0 && result.worksheets.every(sheet => sheet.status === 'already imported');
     const matchedExisting = !alreadyImported && result.candidatesCreated === 0 && result.interviewsAdded === 0 && (result.cvSharesAdded || 0) === 0 && result.duplicatesSkipped > 0;
     $('#workspaceMessage').textContent = alreadyImported
@@ -1407,6 +1414,7 @@ function activateTrackerTab(selected, persist = true) {
 document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => {
   activateTrackerTab(button.dataset.tab);
   loadRecruiterAnalyticsData();
+  if (button.dataset.tab === 'importhistory') loadImportReports();
 }));
 $('#filterMonth').value = '';
 $('#filterDate').value = '';
@@ -1472,9 +1480,10 @@ $('#analyticsRecruiterDirectory')?.addEventListener('click', manageRecruiterDire
 populateStageOptions();
 loadRecruiterAnalyticsData(true);
 function autoRefreshTalentWorkspace() {
-  if (document.visibilityState !== 'visible' || document.querySelector('dialog[open]') || weeklyEntriesDirty) return;
+  if (document.visibilityState !== 'visible' || document.querySelector('dialog[open]') || weeklyEntriesDirty || Date.now() - lastTalentUserInteractionAt < 8000) return;
   if (Date.now() - lastTalentRefreshAt >= 20000) loadRecruiterAnalyticsData();
 }
+['pointerdown', 'keydown'].forEach(type => document.addEventListener(type, () => { lastTalentUserInteractionAt = Date.now(); }, true));
 window.addEventListener('focus', autoRefreshTalentWorkspace);
 document.addEventListener('visibilitychange', autoRefreshTalentWorkspace);
 setInterval(autoRefreshTalentWorkspace, 30000);
