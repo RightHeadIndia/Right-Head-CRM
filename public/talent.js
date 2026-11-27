@@ -935,6 +935,26 @@ function mondayFor(date) { const result = new Date(date.getFullYear(), date.getM
 function selectedWeekDays() { const [year, month, day] = $('#weekStart').value.split('-').map(Number); const monday = new Date(year, month - 1, day); return TA_DAYS.map((_, i) => { const d = new Date(monday); d.setDate(d.getDate() + i); return localDateKey(d); }); }
 function candidateEvents(candidate) {
   const events = (candidate.statusHistory || []).map(event => ({ ...event, recruiter: event.recruiter || candidate.recruiter }));
+  // Imported tracker workbooks often keep outcomes on interview rows instead
+  // of candidate statusHistory. Turn those outcomes into dated funnel events
+  // so analytics reflects the source records as well.
+  for (const interview of candidate.interviews || []) {
+    const outcome = [interview.candidateStatus, interview.clientStatus, interview.finalCall]
+      .map(value => String(value || '').trim()).filter(Boolean);
+    const text = outcome.join(' ').toLocaleLowerCase();
+    const stage = /reject|declin|not selected|not shortlisted|not joined/.test(text) ? 'Rejected'
+      : /join|hired/.test(text) ? 'Joined'
+      : /offer|offered|selected/.test(text) ? 'Offer'
+      : /short.?list/.test(text) ? 'Shortlisted' : '';
+    const stageDate = stage === 'Shortlisted' ? interview.shortlistedDate
+      : stage === 'Offer' ? interview.offeredDate
+      : stage === 'Joined' ? interview.doj
+      : interview.rejectedDate;
+    const date = normalizedDateKey(stageDate || interview.date);
+    if (stage && date && !events.some(event => event.stage === stage && normalizedDateKey(event.at || event.date) === date)) {
+      events.push({ stage, at: `${date}T12:00:00`, recruiter: interview.recruiter || candidate.recruiter });
+    }
+  }
   const datedStages = [
     { stage: 'Shortlisted', date: candidate.shortlistedDate },
     { stage: 'Offer', date: candidate.offeredDate },
@@ -944,6 +964,16 @@ function candidateEvents(candidate) {
   for (const item of datedStages) {
     const date = normalizedDateKey(item.date);
     if (date && !events.some(event => event.stage === item.stage && normalizedDateKey(event.at || event.date) === date)) events.push({ stage: item.stage, at: `${date}T12:00:00`, recruiter: candidate.recruiter });
+  }
+  // Older records can have a current pipeline stage without a matching
+  // statusHistory entry or stage-specific date. Count that current stage in
+  // recruiter analytics using the record's last update (or creation) date.
+  const currentStage = String(candidate.stage || '').trim();
+  const currentStageDate = normalizedDateKey(candidate.updatedAt || candidate.createdAt);
+  if (['Shortlisted', 'Offer', 'Joining', 'Joined', 'Rejected'].includes(currentStage)
+      && currentStageDate
+      && !events.some(event => event.stage === currentStage)) {
+    events.push({ stage: currentStage, at: `${currentStageDate}T12:00:00`, recruiter: candidate.recruiter });
   }
   return events;
 }
