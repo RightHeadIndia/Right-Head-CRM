@@ -1225,7 +1225,7 @@ app.get('/api/notifications', (req, res) => {
 
   for (const client of db.clients) {
     const dueAt = Date.parse(client.followUp || '');
-    if (!Number.isFinite(dueAt) || dueAt > endToday.getTime() || ['onboarded', 'rejected'].includes(client.stage)) continue;
+    if (!Number.isFinite(dueAt) || dueAt > endToday.getTime() || ['onboarded', 'rejected'].includes(client.stage) || (client.emailShared && client.credentialsShared)) continue;
     notifications.push({
       id: `followup:${client.id}:${client.followUp}`,
       type: 'followup',
@@ -1487,7 +1487,7 @@ app.get('/api/dashboard', (req, res) => {
   startToday.setHours(0, 0, 0, 0);
 
   const active = cs.filter(c =>
-    c.followUp && c.stage !== 'onboarded' && c.stage !== 'rejected'
+    c.followUp && c.stage !== 'onboarded' && c.stage !== 'rejected' && !(c.emailShared && c.credentialsShared)
   );
 
   const due = active
@@ -1869,7 +1869,7 @@ app.post('/api/mail/follow-up-preview', (req, res) => {
   res.json({ recipients, ignored: audienceKey === 'selected' ? requested.length - recipients.length : 0 });
 });
 
-const FINAL_REPLY_WAIT_DAYS = 3;
+const FINAL_REPLY_WAIT_DAYS = 2;
 function updateSequenceNextRun(campaign) {
   const dates = (campaign.recipients || [])
     .filter(r => ['active', 'retry', 'sending', 'awaiting_outcome'].includes(r.status))
@@ -2392,7 +2392,7 @@ async function runSequenceScheduler() {
               if (c.stage === 'new') c.stage = 'contacted';
               c.communicationStatus = 'contacted';
               c.followUp = r.status === 'awaiting_outcome'
-                ? new Date(Date.now() + FINAL_REPLY_WAIT_DAYS * 864e5).toISOString()
+                ? ''
                 : new Date(Date.now() + (saved.steps[r.nextStep].day - step.day) * 864e5).toISOString();
               c.updatedAt = now();
             }

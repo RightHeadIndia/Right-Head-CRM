@@ -700,7 +700,7 @@ test('mass mail can target selected clients across stages but excludes Red Zone 
   });
   assert.equal(sequence.status, 200);
   assert.equal(sequence.json.total, 1);
-  assert.deepEqual(sequence.json.finalOutcome, { action: 'move_to_red_zone_if_no_reply', waitDays: 3 });
+  assert.deepEqual(sequence.json.finalOutcome, { action: 'move_to_red_zone_if_no_reply', waitDays: 2 });
   assert.equal(sequence.json.recipients[0].clientId, contacted.json.id);
   assert.equal(sequence.json.recipients[0].email, 'selected-alternate@test.example');
 

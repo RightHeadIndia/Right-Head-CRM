@@ -17,6 +17,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': 
 const STAGES = { new: 'New', contacted: 'Contacted', replied: 'Replied (Blue)', onboarded: 'Onboarded (Green)', rejected: 'Said No (Red)' };
 const CALLS = { not_called: 'Not called', connected: 'Connected', no_answer: 'No answer', busy: 'Busy', callback: 'Call back' };
 const COMMUNICATION = { not_contacted: 'Not contacted', contacted: 'Contacted', replied: 'Replied', opted_out: 'Opted out' };
+const hasActiveFollowUp = c => c.followUp && c.stage !== 'onboarded' && c.stage !== 'rejected' && !(c.emailShared && c.credentialsShared);
 const badge = s => { const stage = Object.hasOwn(STAGES, s) ? s : 'new'; return `<span class="badge b-${stage}">${STAGES[stage].split(' ')[0] === 'Said' ? 'Said No' : STAGES[stage].split(' ')[0]}</span>`; };
 const CLIENT_ACTION_ICONS = {
   open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>',
@@ -76,7 +77,7 @@ const PAGES = {
   dashboard: { title: 'Dashboard', icon: '&#9638;' },
   clients: { title: 'All Clients', icon: '&#9776;', filter: () => true },
   calls: { title: 'Calling Status', icon: '&#9742;', filter: c => c.stage === 'new' || c.stage === 'contacted' || c.callStatus !== 'not_called' },
-  followups: { title: 'Follow-up Reminders', icon: '&#9200;', filter: c => c.followUp && c.stage !== 'onboarded' && c.stage !== 'rejected', sort: (a, b) => a.followUp.localeCompare(b.followUp) },
+  followups: { title: 'Follow-up Reminders', icon: '&#9200;', filter: hasActiveFollowUp, sort: (a, b) => a.followUp.localeCompare(b.followUp) },
   replied: { title: 'Replies (Blue Zone)', icon: '&#9993;', dot: '#2563eb', filter: c => c.stage === 'replied' },
   onboarded: { title: 'Onboarded Clients', icon: '&#10003;', dot: '#16a34a', filter: c => c.stage === 'onboarded' },
   redzone: { title: 'Red Zone (Said No)', icon: '&#10005;', dot: '#dc2626', filter: c => c.stage === 'rejected' },
@@ -630,6 +631,7 @@ let mailTpls = [];
 let singleMailThread = null;
 let selectedMailAddresses = new Set();
 let mailSelectionQuery = '';
+let mailSelectionStage = '';
 let mailChoiceLimit = 100;
 let stageMailDrafts = {};
 let numberedFollowUpDrafts = {};
@@ -666,10 +668,14 @@ async function renderMail() {
         ${Object.keys(STAGES).filter(k => k !== 'rejected').map(k => `<option value="${k}">${STAGES[k]}</option>`).join('')}</select>
       <div id="m_cnt" class="empty"></div>
       <div id="m_selection" style="display:none">
+        <label style="margin-top:8px;display:block">Filter by stage</label>
+        <select id="m_client_stage" onchange="mailSelectionStage=this.value;mailChoiceLimit=100;renderMailSelection()"><option value="">All stages</option>${Object.keys(STAGES).filter(k => k !== 'rejected').map(k => `<option value="${k}" ${mailSelectionStage === k ? 'selected' : ''}>${STAGES[k]}</option>`).join('')}</select>
         <label style="margin-top:8px;display:block">Find clients</label>
         <input id="m_client_search" type="search" placeholder="Search name, company, or email" value="${esc(mailSelectionQuery)}" oninput="mailSelectionQuery=this.value;mailChoiceLimit=100;renderMailSelection()">
         <div class="actions">
-          <button class="btn small" onclick="selectVisibleMailClients()">Select visible primary emails</button>
+          <label>Bulk select<input id="m_bulk_select_count" type="number" min="1" max="1000" value="50" style="width:72px;margin-left:6px"></label>
+          <button class="btn small" onclick="selectMatchingMailClients()">Select first N primary emails</button>
+          <button class="btn small" onclick="selectVisibleMailClients()">Select visible</button>
           <button class="btn small" onclick="clearMailClientSelection()">Clear selection</button>
         </div>
         <div id="m_client_summary" class="empty"></div>
@@ -691,7 +697,7 @@ async function renderMail() {
       <div class="empty">This controls threading, not message content. Each automated sequence step can have its own subject and message; when continuing a thread, follow-up subjects stay with that conversation.</div>
       <div id="m_sequence_controls">
         <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input id="m_sequence" type="checkbox" style="width:auto" onchange="toggleSequenceEditor()"> Create a sequence with a different email for each follow-up (5 emails total)</label>
-        <div class="empty">Edit each email separately below or choose a saved template for each step. The first sends when you select Start; the next four send every 48 hours. Clients who don’t reply or onboard are moved to Red Zone 3 days after the final follow-up.</div>
+        <div class="empty">Edit each email separately below or choose a saved template for each step. The first sends when you select Start; the next four send every 48 hours. Clients who don’t reply or onboard are moved to Red Zone 2 days after the final follow-up.</div>
         <div id="sequenceEditor" class="full"></div>
       </div>
       <div class="actions"><button id="m_save_template" class="btn" onclick="saveAsTemplate()">Save as template</button><button id="mailSendBtn" class="btn primary" onclick="sendMail()">Send campaign</button></div>
@@ -706,8 +712,8 @@ async function renderMail() {
 }
 function mailSelectionMatches() {
   const query = mailSelectionQuery.trim().toLowerCase();
-  return clients.filter(canMailClient).filter(c =>
-    !query || [c.name, c.company, ...clientEmailAddresses(c)].some(value => String(value || '').toLowerCase().includes(query))
+  return clients.filter(canMailClient).filter(c => (!mailSelectionStage || (c.stage || 'new') === mailSelectionStage) &&
+    (!query || [c.name, c.company, ...clientEmailAddresses(c)].some(value => String(value || '').toLowerCase().includes(query)))
   );
 }
 function renderMailSelection() {
@@ -842,6 +848,17 @@ function toggleMailAddress(id, email, checked) {
   const key = mailAddressKey(id, email);
   if (checked) selectedMailAddresses.add(key);
   else selectedMailAddresses.delete(key);
+  renderMailSelection();
+  audCount();
+  if ($('#m_numbered_followups')?.checked) refreshNumberedFollowupPreview();
+}
+function selectMatchingMailClients() {
+  const requested = Number($('#m_bulk_select_count')?.value);
+  if (!Number.isInteger(requested) || requested < 1) return toast('Enter a number of clients to select');
+  mailSelectionMatches().slice(0, requested).forEach(c => {
+    const primary = clientEmailAddresses(c)[0];
+    if (primary) selectedMailAddresses.add(mailAddressKey(c.id, primary));
+  });
   renderMailSelection();
   audCount();
   if ($('#m_numbered_followups')?.checked) refreshNumberedFollowupPreview();
@@ -1382,7 +1399,7 @@ async function importPastedText() {
 // ---------- reminders (browser notifications) ----------
 let notified = new Set();
 function checkReminders() {
-  const due = clients.filter(c => c.followUp && !['onboarded', 'rejected'].includes(c.stage) && new Date(c.followUp) <= new Date() && !notified.has(c.id + c.followUp));
+  const due = clients.filter(c => hasActiveFollowUp(c) && new Date(c.followUp) <= new Date() && !notified.has(c.id + c.followUp));
   due.forEach(c => {
     notified.add(c.id + c.followUp);
     toast(`Follow-up due: ${c.name}`);
