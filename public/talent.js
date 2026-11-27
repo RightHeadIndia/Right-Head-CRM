@@ -797,9 +797,13 @@ function renderRecruiterAnalytics() {
     for (const event of events) {
       if (!dateFilterMatch(event.at || event.date)) continue;
       const row = ensure(event.recruiter || candidate.recruiter); if (!row) continue;
-      if (event.stage === 'Shortlisted') row.shortlisted.add(candidate.id);
-      if (['Offer', 'Joining', 'Joined'].includes(event.stage)) row.selected.add(candidate.id);
-      if (event.stage === 'Rejected') row.rejected.add(candidate.id);
+      // These cards describe the current funnel, so ignore old status-history
+      // events when the candidate has since moved to another stage.
+      const currentStage = String(candidate.stage || '').trim();
+      if (event.stage === 'Shortlisted' && currentStage === 'Shortlisted') row.shortlisted.add(candidate.id);
+      if (['Offer', 'Joining', 'Joined'].includes(event.stage)
+          && ['Offer', 'Joining', 'Joined'].includes(currentStage)) row.selected.add(candidate.id);
+      if (event.stage === 'Rejected' && currentStage === 'Rejected') row.rejected.add(candidate.id);
     }
     const legacyInterview = candidate.interviewDate || candidate.interviewMode || candidate.interviewStatus || candidate.company || candidate.role
       ? [{ date: candidate.interviewDate, recruiter: candidate.recruiter, mode: candidate.interviewMode, candidateStatus: candidate.interviewStatus, clientStatus: candidate.clientStatus }]
