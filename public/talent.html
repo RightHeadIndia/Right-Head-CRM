@@ -46,13 +46,13 @@
   <div id="workspaceMessage" class="weekly-message" role="status" hidden></div>
   <div id="candidateBulkActions" class="bulk-actions" hidden><span><strong id="selectedCandidateCount">0</strong> candidates selected</span><button id="clearCandidateSelection" class="secondary-button" type="button">Clear selection</button><button id="deleteSelectedCandidates" class="danger-button" type="button">Delete selected</button></div>
   <nav class="tracker-tabs" role="tablist" aria-label="Talent Acquisition trackers">
-    <button type="button" role="tab" aria-selected="true" data-tab="interviews"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3.5v3M16 3.5v3M3.5 9h17M8 13h3M8 16h7"/></svg><span>Interview Tracker</span></button>
-    <button type="button" role="tab" aria-selected="false" data-tab="offers"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h12M8 12h12M8 19h12"/><path d="m3.5 5 1.5 1.5L7 4.5M3.5 12l1.5 1.5L7 11M3.5 19l1.5 1.5L7 18"/></svg><span>Shortlisted / Offered Tracker</span></button>
-    <button type="button" role="tab" aria-selected="false" data-tab="joined"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16.5 9"/></svg><span>Joined</span></button>
+    <button type="button" role="tab" aria-selected="true" data-tab="pipeline"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z"/></svg><span>All Candidates</span></button>
+    <button type="button" role="tab" aria-selected="false" data-tab="interviews"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3.5v3M16 3.5v3M3.5 9h17M8 13h3M8 16h7"/></svg><span>Interview Tracker</span></button>
+    <button type="button" role="tab" aria-selected="false" data-tab="offers"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h12M8 12h12M8 19h12"/><path d="m3.5 5 1.5 1.5L7 4.5M3.5 12l1.5 1.5L7 11M3.5 19l1.5 1.5L7 18"/></svg><span>Shortlisted</span></button>
+    <button type="button" role="tab" aria-selected="false" data-tab="joined"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16.5 9"/></svg><span>Joined / Offered</span></button>
     <button type="button" role="tab" aria-selected="false" data-tab="weekly"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3.5v3M16 3.5v3M3.5 9h17M8 13h2M14 13h2M8 16h2M14 16h2"/></svg><span>Weekly Tracker</span></button>
     <button type="button" role="tab" aria-selected="false" data-tab="cvshares"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.5-3.6M8.2 13.2l7.5 3.6"/></svg><span>CV Shared</span></button>
     <button type="button" role="tab" aria-selected="false" data-tab="recruiters"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20v-1.5a4 4 0 0 1 4-4h2a4 4 0 0 1 4 4V20M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM16 4.5a3.5 3.5 0 0 1 0 6.8M17 14.5h1a4 4 0 0 1 4 4V20"/></svg><span>Recruiter Analytics</span></button>
-    <button type="button" role="tab" aria-selected="false" data-tab="pipeline"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z"/></svg><span>Candidate Pipeline</span></button>
     <button type="button" role="tab" aria-selected="false" data-tab="importhistory"><svg class="tracker-tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4zM3 4h18v3H3zM9 11h6M9 15h6"/></svg><span>Import History</span></button>
   </nav>
   <section class="tracker-view" id="interviewsView">
@@ -63,14 +63,14 @@
   </section>
   <section class="tracker-view" id="offersView" hidden>
     <section class="candidate-panel">
-      <div class="panel-heading"><div><h2>Shortlisted / Offered Tracker</h2><p>Candidate status stays connected to the Interview Tracker.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="offers" placeholder="Search candidates" aria-label="Search shortlisted and offered tracker"></label><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
-      <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-select-all aria-label="Select all visible shortlisted candidates"></th><th>TA Name</th><th>Month</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Status</th><th>Final Call</th><th>Joining date</th><th>Remarks</th><th></th></tr></thead><tbody id="offerRows"></tbody></table><div id="offerEmpty" class="empty-state compact" hidden><strong>No shortlisted or offered candidates</strong><p>Change a candidate status to Shortlisted, Offer, or Joining to see them here.</p></div></div>
+      <div class="panel-heading"><div><h2>Shortlisted</h2><p>Candidates currently at the shortlisted stage.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="offers" placeholder="Search candidates" aria-label="Search shortlisted candidates"></label><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-select-all aria-label="Select all visible shortlisted candidates"></th><th>TA Name</th><th>Month</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Status</th><th>Final Call</th><th>Joining date</th><th>Remarks</th><th></th></tr></thead><tbody id="offerRows"></tbody></table><div id="offerEmpty" class="empty-state compact" hidden><strong>No shortlisted candidates</strong><p>Change a candidate status to Shortlisted to see them here.</p></div></div>
     </section>
   </section>
   <section class="tracker-view" id="joinedView" hidden>
     <section class="candidate-panel">
-      <div class="panel-heading"><div><h2>Joined Tracker</h2><p>Candidates who have joined the company, with their joining dates and details.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="joined" placeholder="Search joined candidates" aria-label="Search joined candidates"></label><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
-      <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-select-all aria-label="Select all visible joined candidates"></th><th>TA Name</th><th>Month</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Status</th><th>Joining date</th><th>Remarks</th><th></th></tr></thead><tbody id="joinedRows"></tbody></table><div id="joinedEmpty" class="empty-state compact" hidden><strong>No joined candidates yet</strong><p>Change a candidate status to Joining or Joined to see them here.</p></div></div>
+      <div class="panel-heading"><div><h2>Joined / Offered Tracker</h2><p>Candidates who have received an offer or joined the company.</p></div><div class="filters"><label class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" data-search="joined" placeholder="Search joined or offered candidates" aria-label="Search joined or offered candidates"></label><button class="secondary-button" type="button" data-export>Excel export</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-select-all aria-label="Select all joined or offered candidates"></th><th>TA Name</th><th>Month</th><th>Company</th><th>Profile</th><th>Candidate</th><th>Status</th><th>Joining date</th><th>Remarks</th><th></th></tr></thead><tbody id="joinedRows"></tbody></table><div id="joinedEmpty" class="empty-state compact" hidden><strong>No joined or offered candidates yet</strong><p>Change a candidate status to Offer, Joining, or Joined to see them here.</p></div></div>
     </section>
   </section>
   <section class="tracker-view" id="weeklyView" hidden>
@@ -118,7 +118,7 @@
   <section class="tracker-view" id="pipelineView" hidden>
   <section class="candidate-panel">
     <div class="panel-heading">
-      <div><h2>Candidate pipeline</h2><p>Search, review, and update your candidates.</p></div>
+      <div><h2>All Candidates</h2><p>Search and update candidates across every stage. Expand Details to see the full record and history.</p></div>
       <div class="filters">
         <label class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search candidates" aria-label="Search candidates"></label>
         <label class="select-wrap"><span class="sr-only">Filter by stage</span><select id="stageFilter"><option value="">All stages</option></select></label>

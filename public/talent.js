@@ -23,7 +23,7 @@ let lastTalentUserInteractionAt = 0;
 let weeklyEntriesDirty = false;
 let hasLoadedTalentWorkspace = false;
 const TALENT_VIEW_STATE_KEY = 'right-head-talent-view-state';
-const TRACKER_TABS = ['interviews', 'offers', 'joined', 'weekly', 'cvshares', 'recruiters', 'importhistory', 'pipeline'];
+const TRACKER_TABS = ['pipeline', 'interviews', 'offers', 'joined', 'weekly', 'cvshares', 'recruiters', 'importhistory'];
 function readTalentViewState() {
   try { return JSON.parse(localStorage.getItem(TALENT_VIEW_STATE_KEY) || '{}'); }
   catch { return {}; }
@@ -49,17 +49,13 @@ const api = async (url, method = 'GET', body) => {
 };
 
 function renderRecruiterOptions() {
-  const candidateNames = new Set([
-    ...(candidates || []).map(candidate => candidate.name),
-    ...(cvShares || []).map(share => share.candidateName)
-  ].map(value => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase()).filter(Boolean));
   const nonNames = new Set(['confirmed', 'awaiting confirmation', 'to be aligned', 'selected', 'rejected', 'shortlisted', 'interview', 'screening', 'offer', 'joining', 'joined', 'on hold', 'not selected']);
   const isRecruiterName = value => {
     const name = String(value || '').trim().replace(/\s+/g, ' ');
-    return name.length >= 2 && /[a-z]/i.test(name) && !/[\d@]/.test(name) && !/\b(?:gmail|yahoo|outlook|hotmail)\b/i.test(name) && !/^\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(name) && !nonNames.has(name.toLocaleLowerCase()) && !candidateNames.has(name.toLocaleLowerCase());
+    return name.length >= 2 && /[a-z]/i.test(name) && !/[\d@]/.test(name) && !/\b(?:gmail|yahoo|outlook|hotmail)\b/i.test(name) && !/^\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(name) && !nonNames.has(name.toLocaleLowerCase());
   };
   const assignedNames = [
-    ...(candidates || []).flatMap(candidate => [candidate.recruiter, ...(candidate.interviews || []).map(interview => interview.recruiter)]),
+    ...(candidates || []).flatMap(candidate => [candidate.recruiter, ...(candidate.interviews || []).map(interview => interview.recruiter), ...(candidate.statusHistory || []).map(event => event.recruiter)]),
     ...(cvShares || []).map(share => share.recruiter),
     ...(weeklyReports || []).map(report => report.recruiter)
   ];
@@ -267,7 +263,7 @@ function sortByDate(rows) {
   return rows.sort((a, b) => compareDates(candidateDate(a.candidate || a, a.entry), candidateDate(b.candidate || b, b.entry)));
 }
 function populateYearFilters() {
-  const current = $('#filterYear').value;
+  const current = $('#filterYear').value || savedTalentViewState.year || '';
   const dates = candidates.flatMap(candidate => [
     candidate.interviewDate, candidate.sharedDate, candidate.doj, candidate.offeredDate,
     candidate.shortlistedDate, candidate.rejectedDate, candidate.createdAt,
@@ -287,11 +283,24 @@ function updateMetrics() {
   $('#interviewCount').textContent = filtered.filter(item => item.stage === 'Interview').length;
   $('#hiredCount').textContent = filtered.filter(item => ['Joining', 'Joined'].includes(item.stage)).length;
 }
+function candidateDetailsMarkup(item) {
+  const fields = [
+    ['Email', item.email], ['Phone', item.phone], ['Contact details', item.contactDetails], ['Month', item.month],
+    ['Interview date', item.interviewDate], ['Interview mode', item.interviewMode], ['Interview time', item.interviewTime],
+    ['Candidate status', item.interviewStatus], ['Client status', item.clientStatus], ['Shared date', item.sharedDate],
+    ['Shortlisted date', item.shortlistedDate], ['Offer date', item.offeredDate], ['Rejected date', item.rejectedDate],
+    ['Final call', item.finalCall], ['Joining date', item.doj], ['Source', item.source], ['Feedback', item.feedback],
+    ['Remarks', item.remarks], ['Notes', item.notes], ['Added', item.createdAt]
+  ].filter(([, value]) => value);
+  const interviews = (item.interviews || []).map((interview, index) => `<li><strong>Interview ${index + 1}</strong>: ${escapeHTML([interview.date, interview.company, interview.role, interview.recruiter, interview.mode, interview.time, interview.candidateStatus, interview.clientStatus, interview.remarks].filter(Boolean).join(' · '))}</li>`).join('');
+  const history = (item.statusHistory || []).map(event => `<li>${escapeHTML([event.at || event.date, event.stage, event.recruiter, event.notes].filter(Boolean).join(' · '))}</li>`).join('');
+  return `<div class="all-candidate-details">${fields.map(([label, value]) => `<div><strong>${escapeHTML(label)}</strong><span>${escapeHTML(value)}</span></div>`).join('')}${interviews ? `<section><strong>Interview history</strong><ul>${interviews}</ul></section>` : ''}${history ? `<section><strong>Status history</strong><ul>${history}</ul></section>` : ''}</div>`;
+}
 function render() {
   updateMetrics();
   const query = $('#search').value.trim().toLowerCase();
   const stage = $('#stageFilter').value;
-  const visible = candidates.filter(item => !['Joined', 'Joining'].includes(item.stage) && [item.name, item.role, item.email, item.phone, item.source, item.company, item.recruiter].some(value => String(value || '').toLowerCase().includes(query)) && (!stage || item.stage === stage) && candidateMatchesDateFilter(item) && candidateMatchesRecruiter(item))
+  const visible = candidates.filter(item => [item.name, item.role, item.email, item.phone, item.source, item.company, item.recruiter, item.contactDetails, item.notes, item.feedback, item.remarks].some(value => String(value || '').toLowerCase().includes(query)) && (!stage || item.stage === stage) && candidateMatchesDateFilter(item) && candidateMatchesRecruiter(item))
     .sort((a, b) => compareDates(candidateDate(a), candidateDate(b)));
   $('#candidateRows').innerHTML = visible.map(item => `<tr data-id="${escapeHTML(item.id)}">
     <td><input type="checkbox" data-candidate-select="${escapeHTML(item.id)}" aria-label="Select ${escapeHTML(item.name)}"></td>
@@ -303,8 +312,8 @@ function render() {
     <td>${escapeHTML(item.source || '”?')}</td>
     <td><label class="sr-only" for="stage-${escapeHTML(item.id)}">Stage for ${escapeHTML(item.name)}</label><select class="stage-select stage-${escapeHTML(item.stage)}" id="stage-${escapeHTML(item.id)}" data-action="stage">${STAGES.map(option => `<option value="${option}" ${item.stage === option ? 'selected' : ''}>${option}</option>`).join('')}</select></td>
     <td>${displayDate(item.createdAt)}</td>
-    <td><div class="row-actions"><button class="action-button" type="button" data-action="edit">Edit</button><button class="action-button delete" type="button" data-action="delete">Delete</button></div></td>
-  </tr>`).join('');
+    <td><div class="row-actions"><button class="action-button" type="button" data-action="details" aria-expanded="false">Details</button><button class="action-button" type="button" data-action="edit">Edit</button><button class="action-button delete" type="button" data-action="delete">Delete</button></div></td>
+  </tr><tr class="candidate-details-row" data-details-for="${escapeHTML(item.id)}" hidden><td colspan="10">${candidateDetailsMarkup(item)}</td></tr>`).join('');
   const isEmpty = candidates.length === 0;
   $('#emptyState').hidden = !isEmpty;
   $('#noResults').hidden = isEmpty || visible.length > 0;
@@ -402,6 +411,13 @@ $('#candidateRows').addEventListener('click', async event => {
   if (!button) return;
   const candidate = candidates.find(item => item.id === button.closest('tr').dataset.id);
   if (!candidate) return;
+  if (button.dataset.action === 'details') {
+    const details = $('#candidateRows').querySelector(`[data-details-for="${CSS.escape(candidate.id)}"]`);
+    if (details) details.hidden = !details.hidden;
+    button.setAttribute('aria-expanded', String(details && !details.hidden));
+    button.textContent = details && !details.hidden ? 'Hide details' : 'Details';
+    return;
+  }
   if (button.dataset.action === 'edit') openDialog(candidate);
   if (button.dataset.action === 'delete') deleteCandidate(candidate);
 });
@@ -575,8 +591,34 @@ $('#stageFilter').addEventListener('change', render);
 function persistDateFilters() {
   saveTalentViewState({ month: $('#filterMonth').value, date: $('#filterDate').value, year: $('#filterYear').value, recruiter: $('#recruiterFilter').value, sort: $('#dateSort').value });
 }
-['filterMonth', 'filterDate', 'filterYear', 'recruiterFilter', 'dateSort'].forEach(id => $(`#${id}`).addEventListener('change', () => { cvSharePage = 0; persistDateFilters(); render(); renderWeekly(); }));
-$('#clearDateFilters').addEventListener('click', () => { $('#filterMonth').value = ''; $('#filterDate').value = ''; $('#filterYear').value = ''; $('#recruiterFilter').value = ''; $('#dateSort').value = 'newest'; cvSharePage = 0; persistDateFilters(); render(); renderWeekly(); });
+function syncRecruiterMonthToDateFilters(changedId) {
+  const date = $('#filterDate').value, year = $('#filterYear').value, month = $('#filterMonth').value;
+  if (date) {
+    $('#recruiterMonth').value = date.slice(0, 7);
+    return;
+  }
+  if (changedId === 'filterMonth' && month) {
+    $('#recruiterMonth').value = `${year || new Date().getFullYear()}-${month}`;
+    return;
+  }
+  if (changedId === 'filterYear' && year) {
+    const currentMonth = ($('#recruiterMonth').value || localDateKey(new Date()).slice(0, 7)).slice(5, 7);
+    $('#recruiterMonth').value = `${year}-${currentMonth}`;
+  }
+}
+['filterMonth', 'filterDate', 'filterYear', 'recruiterFilter', 'dateSort'].forEach(id => $(`#${id}`).addEventListener('change', () => {
+  if (id === 'filterDate' && $('#filterDate').value) {
+    const [year, month] = $('#filterDate').value.split('-');
+    $('#filterMonth').value = month;
+    if (![...$('#filterYear').options].some(option => option.value === year)) $('#filterYear').insertAdjacentHTML('beforeend', `<option value="${year}">${year}</option>`);
+    $('#filterYear').value = year;
+  } else if ((id === 'filterMonth' || id === 'filterYear') && (id === 'filterYear' || $('#filterMonth').value)) {
+    $('#filterDate').value = '';
+  }
+  syncRecruiterMonthToDateFilters(id);
+  cvSharePage = 0; persistDateFilters(); render(); renderWeekly();
+}));
+$('#clearDateFilters').addEventListener('click', () => { $('#filterMonth').value = ''; $('#filterDate').value = ''; $('#filterYear').value = ''; $('#recruiterFilter').value = ''; $('#dateSort').value = 'newest'; $('#recruiterMonth').value = localDateKey(new Date()).slice(0, 7); cvSharePage = 0; persistDateFilters(); render(); renderWeekly(); });
 $('#closeDialog').addEventListener('click', () => $('#candidateDialog').close());
 $('#cancelDialog').addEventListener('click', () => $('#candidateDialog').close());
 $('#logout').addEventListener('click', async () => {
@@ -860,12 +902,12 @@ function renderTrackers() {
   $('#interviewRows').innerHTML = interviewRows.map(({ candidate: c, entry: i }) => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.name)}${td(i.recruiter || c.recruiter)}${td(formatInterviewDate(i.date || c.interviewDate))}${td(i.company || c.company)}${td(i.role || c.role)}${td(i.mode || c.interviewMode)}${td(formatInterviewTime(i.time || c.interviewTime))}<td>${stageSelect(c)}<small class="raw-status">${escapeHTML(i.candidateStatus || c.interviewStatus || c.stage || '')}</small></td>${td(i.clientStatus || c.clientStatus)}${td(interviewContact(i, c))}${td(i.remarks || c.remarks || c.feedback)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
   $('#interviewEmpty').hidden = interviewRows.length > 0;
   const offerQuery = trackerSearch('offers');
-  const offerCandidates = candidates.filter(c => ['Shortlisted', 'Offer', 'Joining'].includes(c.stage) && dateFilterMatch(offerDate(c)) && candidateMatchesRecruiter(c) && candidateMatch(c, offerQuery));
+  const offerCandidates = candidates.filter(c => c.stage === 'Shortlisted' && dateFilterMatch(offerDate(c)) && candidateMatchesRecruiter(c) && candidateMatch(c, offerQuery));
   offerCandidates.sort((a, b) => compareDates(offerDate(a), offerDate(b)));
   $('#offerRows').innerHTML = offerCandidates.map(c => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.recruiter)}${td(c.month || c.doj?.slice(0, 7) || c.createdAt?.slice(0, 7))}${td(c.company)}${td(c.role)}${td(c.name)}<td>${stageSelect(c)}</td>${td(c.finalCall)}${td(c.doj)}${td(c.remarks || c.interviews?.at(-1)?.remarks)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
   $('#offerEmpty').hidden = offerCandidates.length > 0;
   const joinedQuery = trackerSearch('joined');
-  const joinedCandidates = candidates.filter(c => ['Joined', 'Joining'].includes(c.stage) && dateFilterMatch(offerDate(c)) && candidateMatchesRecruiter(c) && candidateMatch(c, joinedQuery));
+  const joinedCandidates = candidates.filter(c => ['Offer', 'Joining', 'Joined'].includes(c.stage) && dateFilterMatch(offerDate(c)) && candidateMatchesRecruiter(c) && candidateMatch(c, joinedQuery));
   joinedCandidates.sort((a, b) => compareDates(offerDate(a), offerDate(b)));
   $('#joinedRows').innerHTML = joinedCandidates.map(c => `<tr><td><input type="checkbox" data-candidate-select="${escapeHTML(c.id)}" aria-label="Select ${escapeHTML(c.name)}"></td>${td(c.recruiter)}${td(c.month || c.doj?.slice(0, 7) || c.createdAt?.slice(0, 7))}${td(c.company)}${td(c.role)}${td(c.name)}<td>${stageSelect(c)}</td>${td(c.doj)}${td(c.remarks || c.interviews?.at(-1)?.remarks)}<td><button class="action-button" type="button" data-edit-candidate="${escapeHTML(c.id)}">Edit</button><button class="action-button delete" type="button" data-delete-candidate="${escapeHTML(c.id)}">Delete</button></td></tr>`).join('');
   $('#joinedEmpty').hidden = joinedCandidates.length > 0;
@@ -1000,7 +1042,7 @@ function metricCandidates(recruiter, metric, dateKey) {
 function renderWeekly() {
   if (!$('#weeklyRows')) return;
   const recruiters = new Map();
-  candidates.forEach(c => [c.recruiter, ...(c.interviews || []).map(i => i.recruiter)].filter(Boolean).forEach(name => { if (name.trim()) recruiters.set(name.toLowerCase(), name.trim()); }));
+  candidates.forEach(c => [c.recruiter, ...(c.interviews || []).map(i => i.recruiter), ...(c.statusHistory || []).map(event => event.recruiter)].filter(Boolean).forEach(name => { if (name.trim()) recruiters.set(name.toLowerCase(), name.trim()); }));
   cvShares.forEach(share => { if (share.recruiter?.trim()) recruiters.set(share.recruiter.toLowerCase(), share.recruiter.trim()); });
   weeklyReports.forEach(r => recruiters.set(r.recruiter.toLowerCase(), r.recruiter));
   recruiterDirectory.forEach(person => recruiters.set(person.name.toLocaleLowerCase(), person.name));
@@ -1439,7 +1481,7 @@ $('#confirmImport').addEventListener('click', () => submitHistoricalImport(impor
 $('#trackerImportDialog').addEventListener('close', () => { const result = $('#workspaceMessage'); if (result.textContent.startsWith('Historical import report')) result.hidden = false; });
 loadImportReports();
 function activateTrackerTab(selected, persist = true) {
-  const active = TRACKER_TABS.includes(selected) ? selected : 'interviews';
+  const active = TRACKER_TABS.includes(selected) ? selected : 'pipeline';
   const activeButton = document.querySelector(`[data-tab="${active}"]`);
   document.querySelectorAll('[data-tab]').forEach(tab => tab.setAttribute('aria-selected', String(tab === activeButton)));
   document.querySelectorAll('.tracker-view').forEach(view => { view.hidden = view.id !== `${active}View`; });
@@ -1450,11 +1492,14 @@ document.querySelectorAll('[data-tab]').forEach(button => button.addEventListene
   loadRecruiterAnalyticsData();
   if (button.dataset.tab === 'importhistory') loadImportReports();
 }));
-$('#filterMonth').value = '';
-$('#filterDate').value = '';
-$('#filterYear').value = '';
+$('#filterMonth').value = /^(0[1-9]|1[0-2])$/.test(savedTalentViewState.month || '') ? savedTalentViewState.month : '';
+$('#filterDate').value = /^\d{4}-\d{2}-\d{2}$/.test(savedTalentViewState.date || '') ? savedTalentViewState.date : '';
+// Year options are populated after candidate and share data loads. Keep the saved
+// value available so populateYearFilters can restore it when that list is built.
+$('#filterYear').value = savedTalentViewState.year || '';
+$('#recruiterFilter').value = savedTalentViewState.recruiter || '';
 $('#dateSort').value = savedTalentViewState.sort === 'oldest' ? 'oldest' : 'newest';
-activateTrackerTab(savedTalentViewState.tab || 'interviews', false);
+activateTrackerTab(savedTalentViewState.tab || 'pipeline', false);
 document.querySelectorAll('[data-add-candidate]').forEach(button => button.addEventListener('click', addCandidate));
 document.querySelectorAll('[data-export]').forEach(button => button.addEventListener('click', exportExcel));
 document.querySelectorAll('[data-search]').forEach(input => input.addEventListener('input', debounce(() => { cvSharePage = 0; importedSharePage = 0; renderTrackers(); })));
@@ -1472,8 +1517,19 @@ document.querySelectorAll('#interviewRows, #offerRows, #joinedRows').forEach(bod
 }));
 $('#weekStart').value = localDateKey(mondayFor(new Date()));
 $('#weekStart').addEventListener('change', () => { const date = new Date(`${$('#weekStart').value}T00:00:00`); if (!Number.isNaN(date.getTime())) { $('#weekStart').value = localDateKey(mondayFor(date)); loadWeekly(); } });
-$('#recruiterMonth').value = localDateKey(new Date()).slice(0, 7);
-$('#recruiterMonth').addEventListener('change', () => renderRecruiterAnalytics());
+$('#recruiterMonth').value = $('#filterDate').value
+  ? $('#filterDate').value.slice(0, 7)
+  : `${$('#filterYear').value || new Date().getFullYear()}-${$('#filterMonth').value || localDateKey(new Date()).slice(5, 7)}`;
+$('#recruiterMonth').addEventListener('change', () => {
+  const selectedMonth = $('#recruiterMonth').value;
+  if (!/^\d{4}-\d{2}$/.test(selectedMonth)) return;
+  const [year, month] = selectedMonth.split('-');
+  $('#filterDate').value = '';
+  $('#filterMonth').value = month;
+  if (![...$('#filterYear').options].some(option => option.value === year)) $('#filterYear').insertAdjacentHTML('beforeend', `<option value="${year}">${year}</option>`);
+  $('#filterYear').value = year;
+  cvSharePage = 0; persistDateFilters(); render(); renderWeekly();
+});
 $('#addRecruiter')?.addEventListener('click', () => { $('#newRecruiterName')?.focus(); $('#newRecruiterName')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); });
 $('#createRecruiter')?.addEventListener('click', () => addRecruiterFromInput('#newRecruiterName'));
 $('#analyticsCreateRecruiter')?.addEventListener('click', () => addRecruiterFromInput('#analyticsNewRecruiterName'));
@@ -1513,11 +1569,11 @@ $('#recruiterDirectory')?.addEventListener('click', manageRecruiterDirectoryClic
 $('#analyticsRecruiterDirectory')?.addEventListener('click', manageRecruiterDirectoryClick);
 populateStageOptions();
 loadRecruiterAnalyticsData(true);
-function autoRefreshTalentWorkspace() {
+function autoRefreshTalentWorkspace(force = false) {
   if (document.visibilityState !== 'visible' || document.querySelector('dialog[open]') || weeklyEntriesDirty || Date.now() - lastTalentUserInteractionAt < 8000) return;
-  if (Date.now() - lastTalentRefreshAt >= 20000) loadRecruiterAnalyticsData();
+  if (force || Date.now() - lastTalentRefreshAt >= 15000) loadRecruiterAnalyticsData();
 }
 ['pointerdown', 'keydown'].forEach(type => document.addEventListener(type, () => { lastTalentUserInteractionAt = Date.now(); }, true));
-window.addEventListener('focus', autoRefreshTalentWorkspace);
-document.addEventListener('visibilitychange', autoRefreshTalentWorkspace);
-setInterval(autoRefreshTalentWorkspace, 30000);
+window.addEventListener('focus', () => autoRefreshTalentWorkspace(true));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') autoRefreshTalentWorkspace(true); });
+setInterval(autoRefreshTalentWorkspace, 15000);

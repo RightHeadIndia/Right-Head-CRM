@@ -710,20 +710,16 @@ const TA_METRICS = ['Candidate Shared', 'Candidate Shortlisted', 'Candidate Offe
 const TA_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 function validWeekStart(value) { return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) && new Date(`${value}T00:00:00Z`).getUTCDay() === 1; }
 app.get('/api/ta-recruiters', asyncRoute(async (_req, res) => {
-  const db = load();
+  const db = await loadFresh(['taRecruiters', 'candidates', 'taCvShares', 'weeklyReports']);
   db.taRecruiters ||= [];
-  const candidateNames = new Set([
-    ...db.candidates.map(candidate => candidate.name),
-    ...(db.taCvShares || []).map(share => share.candidateName)
-  ].map(value => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase()).filter(Boolean));
   const nonNames = new Set(['confirmed', 'awaiting confirmation', 'to be aligned', 'selected', 'rejected', 'shortlisted', 'interview', 'screening', 'offer', 'joining', 'joined', 'on hold', 'not selected']);
   const isRecruiterName = value => {
     const name = String(value || '').trim().replace(/\s+/g, ' ');
-    return name.length >= 2 && /[a-z]/i.test(name) && !/[\d@]/.test(name) && !/\b(?:gmail|yahoo|outlook|hotmail)\b/i.test(name) && !/^\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(name) && !nonNames.has(name.toLocaleLowerCase()) && !candidateNames.has(name.toLocaleLowerCase());
+    return name.length >= 2 && /[a-z]/i.test(name) && !/[\d@]/.test(name) && !/\b(?:gmail|yahoo|outlook|hotmail)\b/i.test(name) && !/^\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(name) && !nonNames.has(name.toLocaleLowerCase());
   };
   const names = [
     ...db.taRecruiters.map(row => row.name),
-    ...db.candidates.flatMap(candidate => [candidate.recruiter, ...(candidate.interviews || []).map(interview => interview.recruiter)]),
+    ...db.candidates.flatMap(candidate => [candidate.recruiter, ...(candidate.interviews || []).map(interview => interview.recruiter), ...(candidate.statusHistory || []).map(event => event.recruiter)]),
     ...(db.taCvShares || []).map(share => share.recruiter),
     ...db.weeklyReports.map(report => report.recruiter)
   ].map(value => String(value || '').trim().replace(/\s+/g, ' ')).filter(isRecruiterName);
